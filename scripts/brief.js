@@ -7,7 +7,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { readFileSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -109,7 +109,8 @@ Write 2-3 sentences of specific, actionable advisory. Rules:
 - If there is a news event within 60 minutes, warn to sit out or reduce size
 - If timeframes conflict badly, say so directly and tell them to wait
 - Never write vague statements like "watch for opportunities" or "the market is mixed"
-- Be direct. No fluff.`;
+- Be direct. No fluff.
+- Plain text only — no markdown, no bold, no asterisks.`;
 
 async function advisory(results, key, newsEvents = []) {
   const fmt   = n => n?.toLocaleString('en-US', { maximumFractionDigits: 2 }) ?? '—';
@@ -153,7 +154,7 @@ Write the advisory now.`;
   try {
     const msg = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 200,
+      max_tokens: 300,
       system: ADVISORY_SYSTEM,
       messages: [{ role: 'user', content: prompt }],
     });
@@ -195,7 +196,7 @@ async function analyzeTicker(key, newsEvents = []) {
       return [``, `Stats (60d backtest):`, aLine, bLine];
     })() : [];
 
-    return [
+    const section = [
       `━━━━━━━━━━━━━━━━━━━━━━`,
       `${sym.label} — ${fmt(results[3].price)}`,
       ``,
@@ -205,8 +206,19 @@ async function analyzeTicker(key, newsEvents = []) {
       ``,
       `Advisory: ${adv}`,
     ].join('\n');
+
+    const data = {
+      key,
+      price: results[3].price,
+      timeframes: results.map(r => ({ label: r.label, bias: r.bias.label, sma20: r.sma20, sma200: r.sma200 })),
+      levels: lvl || {},
+      advisory: adv,
+      backtest: BTSTATS[key] || {},
+    };
+
+    return { section, data };
   } catch (e) {
-    return `━━━━━━━━━━━━━━━━━━━━━━\n${sym.label} — ERROR: ${e.message}`;
+    return { section: `━━━━━━━━━━━━━━━━━━━━━━\n${sym.label} — ERROR: ${e.message}`, data: null };
   }
 }
 
@@ -235,7 +247,15 @@ async function main() {
       }));
   } catch { /* ForexFactory down — continue without news */ }
 
-  const sections = await Promise.all(keys.map(k => analyzeTicker(k, newsEvents)));
+  const tickerResults = await Promise.all(keys.map(k => analyzeTicker(k, newsEvents)));
+  const sections = tickerResults.map(r => r.section);
+
+  // Save cache for bot Q&A
+  const cacheObj = { updated: new Date().toISOString(), newsEvents, tickers: {} };
+  for (const { data } of tickerResults) {
+    if (data) cacheObj.tickers[data.key] = data;
+  }
+  try { writeFileSync(join(__dirname, 'brief-cache.json'), JSON.stringify(cacheObj, null, 2)); } catch {}
 
   const msg = [
     `📊 STOIC TA — ${arg ?? 'SESSION BRIEF'}`,
@@ -248,12 +268,23 @@ async function main() {
   ].join('\n');
 
   if (env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID) {
-    const r = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, text: msg }),
-    });
-    const ok = (await r.json()).ok;
-    console.log(ok ? 'telegram: sent' : 'telegram: FAILED');
+    // Send header + each ticker section separately to stay under 4096 char limit
+    const header = [`📊 STOIC TA — ${arg ?? 'SESSION BRIEF'}`, `${now} ET`].join('\n');
+    const footer = `━━━━━━━━━━━━━━━━━━━━━━\n⚠️  Max 3 trades. Hard stop before entry. 2:1 R:R minimum.`;
+    const messages = sections.length === 1
+      ? [[header, sections[0], footer].join('\n\n')]
+      : [header, ...sections, footer];
+
+    let allOk = true;
+    for (const chunk of messages) {
+      const r = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, text: chunk }),
+      });
+      const body = await r.json();
+      if (!body.ok) { console.error('telegram error:', JSON.stringify(body)); allOk = false; }
+    }
+    console.log(allOk ? 'telegram: sent' : 'telegram: FAILED');
   } else {
     console.log(msg);
   }

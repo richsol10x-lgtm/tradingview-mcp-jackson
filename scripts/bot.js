@@ -4,16 +4,19 @@
 // Auto-warns 15 minutes before high-impact economic events.
 // Only responds to the authorised TELEGRAM_CHAT_ID in .env
 
+import Anthropic from '@anthropic-ai/sdk';
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { spawn } from 'child_process';
+import { readFileSync } from 'fs';
 import { getUpcoming, getTodayEvents } from './news.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const require   = createRequire(import.meta.url);
 const env       = require('dotenv').config({ path: join(__dirname, '../.env') }).parsed || {};
 
+const anthropic = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
 const TOKEN    = env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID  = String(env.TELEGRAM_CHAT_ID);
 const BRIEF    = join(__dirname, 'brief.js');
@@ -76,6 +79,50 @@ async function checkUpcomingEvents() {
 setInterval(checkUpcomingEvents, 5 * 60 * 1000);
 checkUpcomingEvents(); // run immediately on start
 
+// --- Free-form Q&A against last brief ---
+const BRIEF_CACHE = join(__dirname, 'brief-cache.json');
+
+const QA_SYSTEM = `You are a StoicTA trading advisor. Answer questions about the last market brief in 2-3 sentences. Reference specific price levels and setup names (A or B). Be direct — no fluff. Plain text only — no markdown, no bold, no asterisks.
+
+StoicTA strategy:
+- Setup A: break of level → retest from other side at 5M 20 SMA confluence → enter. Target 2.618 fib.
+- Setup B: wick sweeps level (SFP) → fails to close through → reverses. Enter on SFP candle close.
+- Key levels: PDH/PDL/PDC (prior day), HCOM/LCOM (composite), PWH/PWL (prior week).`;
+
+async function askAdvisory(question) {
+  let cache;
+  try { cache = JSON.parse(readFileSync(BRIEF_CACHE, 'utf8')); }
+  catch { return 'No brief data yet — run `brief all` first.'; }
+
+  const ageHours = Math.round((Date.now() - new Date(cache.updated).getTime()) / 3600000);
+  const ageNote  = ageHours >= 1 ? ` (brief is ${ageHours}h old)` : '';
+  const fmt = n => n?.toLocaleString('en-US', { maximumFractionDigits: 2 }) ?? '—';
+
+  const context = Object.values(cache.tickers).map(t => {
+    const tfs = t.timeframes.map(tf =>
+      `  ${tf.label}: ${tf.bias} (SMA20: ${fmt(tf.sma20)}, SMA200: ${fmt(tf.sma200)})`
+    ).join('\n');
+    const l = t.levels;
+    return `${t.key} @ ${fmt(t.price)}:\n${tfs}\n  PDH: ${fmt(l.PDH)}  PDC: ${fmt(l.PDC)}  PDL: ${fmt(l.PDL)}  HCOM: ${fmt(l.HCOM)}  LCOM: ${fmt(l.LCOM)}\n  Advisory: ${t.advisory}`;
+  }).join('\n\n');
+
+  const news = cache.newsEvents?.length
+    ? cache.newsEvents.map(e => `  ${e.time} ET — ${e.title}`).join('\n')
+    : '  None';
+
+  try {
+    const msg = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 250,
+      system: QA_SYSTEM,
+      messages: [{ role: 'user', content: `Last brief${ageNote}:\n\n${context}\n\nToday's news:\n${news}\n\nQuestion: ${question}` }],
+    });
+    return msg.content[0].text.trim();
+  } catch (e) {
+    return `API error: ${e.message}`;
+  }
+}
+
 // --- Command handler ---
 async function handleMessage(text) {
   const cmd = text.trim().toLowerCase();
@@ -126,13 +173,9 @@ async function handleMessage(text) {
     return;
   }
 
-  await send(
-    `Commands:\n` +
-    `• brief all\n• brief MNQ / MES / MGC / SIL\n` +
-    `• backtest all\n• backtest MNQ / MES / MGC / SIL\n` +
-    `• news  — today's high-impact events\n` +
-    `• news week  — full week calendar`
-  );
+  // Free-form question — answer from last brief cache
+  const answer = await askAdvisory(text.trim());
+  await send(answer);
 }
 
 // --- Polling loop ---
