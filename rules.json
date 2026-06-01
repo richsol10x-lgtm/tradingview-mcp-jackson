@@ -25,9 +25,13 @@
       "purpose": "Primary trend bias — most important level on the chart"
     },
     "daily_levels": {
-      "type": "horizontal_lines",
-      "levels": ["PDH", "PDL", "PDC"],
-      "note": "Drawn manually each morning before the session. Not a TradingView indicator — does not count toward plan limit."
+      "type": "pine_indicator",
+      "indicator": "Stoic Edge framework v0.23 [Promuckaj]",
+      "entity_id": "dF7EmY",
+      "levels": ["PDH", "PDL", "PDC", "PWH", "PWL", "PWC", "PMH", "PML", "PMC", "HCOM", "LCOM"],
+      "source": "data_get_pine_labels with study_filter: Stoic Edge",
+      "cache": "scripts/levels.json",
+      "note": "Levels are read live from TradingView via MCP when available. Cache is refreshed each time Claude Code runs 'run my brief'. The 8am cron uses the cached values from the previous session."
     },
     "fib_tools": {
       "type": "drawing_tools",
