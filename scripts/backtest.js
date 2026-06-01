@@ -19,11 +19,20 @@ const SYMBOLS = {
   SIL: 'SIL=F',
 };
 
-const STOP_PCT    = 0.0025;  // 0.25% stop below/above the level
 const MAX_RETEST  = 24;      // bars to wait for retest after break
 const MAX_HOLD    = 100;     // bars to check for target/stop after entry
 const MIN_WICK    = 0.0015;  // SFP wick must extend at least 0.15% beyond the level
 const MIN_BREAK   = 0.001;   // break bar must close at least 0.1% beyond level (conviction)
+
+// NY session filter — 9:30am to 4:00pm ET only
+function isNYSession(ts) {
+  const str = new Date(ts * 1000).toLocaleString('en-US', {
+    timeZone: 'America/New_York', hour: 'numeric', minute: '2-digit', hour12: false,
+  });
+  const [h, m] = str.split(':').map(Number);
+  const mins = h * 60 + m;
+  return mins >= 570 && mins < 960; // 9:30 = 570, 16:00 = 960
+}
 
 async function fetchOHLCV(symbol, interval, range) {
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?interval=${interval}&range=${range}`;
@@ -94,6 +103,8 @@ function runSetupA(bars, levels, rMultiplier = 2) {
     const lvl  = levels[dateStr(bar.t)];
     if (!lvl) continue;
 
+    if (!isNYSession(bar.t)) continue;
+
     const { PDH, PDL } = lvl;
     const dayKeyL = `${dateStr(bar.t)}-PDH-LONG`;
     const dayKeyS = `${dateStr(bar.t)}-PDL-SHORT`;
@@ -103,8 +114,10 @@ function runSetupA(bars, levels, rMultiplier = 2) {
       for (let j = i + 1; j < Math.min(i + MAX_RETEST, bars.length); j++) {
         if (bars[j].l <= PDH * 1.001 && bars[j].l >= PDH * 0.999) {
           const entry  = PDH;
-          const stop   = PDH * (1 - STOP_PCT);
-          const target = PDH + rMultiplier * (PDH - stop);
+          const stop   = bars[j].l;              // structural — below retest candle low
+          const rDist  = entry - stop;
+          if (rDist <= 0) break;
+          const target = entry + rMultiplier * rDist;
           const out    = checkOutcome(bars, j + 1, entry, stop, target);
           if (out.result !== 'EXPIRED')
             trades.push({ dir: 'LONG', level: 'PDH', entry, stop, target, ...out, date: dateStr(bar.t) });
@@ -118,8 +131,10 @@ function runSetupA(bars, levels, rMultiplier = 2) {
       for (let j = i + 1; j < Math.min(i + MAX_RETEST, bars.length); j++) {
         if (bars[j].h >= PDL * 0.999 && bars[j].h <= PDL * 1.001) {
           const entry  = PDL;
-          const stop   = PDL * (1 + STOP_PCT);
-          const target = PDL - rMultiplier * (stop - PDL);
+          const stop   = bars[j].h;              // structural — above retest candle high
+          const rDist  = stop - entry;
+          if (rDist <= 0) break;
+          const target = entry - rMultiplier * rDist;
           const out    = checkOutcome(bars, j + 1, entry, stop, target);
           if (out.result !== 'EXPIRED')
             trades.push({ dir: 'SHORT', level: 'PDL', entry, stop, target, ...out, date: dateStr(bar.t) });
@@ -139,6 +154,8 @@ function runSetupB(bars, levels, rMultiplier = 2) {
     const bar = bars[i];
     const lvl = levels[dateStr(bar.t)];
     if (!lvl) continue;
+
+    if (!isNYSession(bar.t)) continue;
 
     const { PDH, PDL } = lvl;
     const dayKeyL = `${dateStr(bar.t)}-PDL-SFP`;
@@ -235,7 +252,7 @@ function formatReport(results) {
 
   return [
     `📊 STOIC TA — BACKTEST RESULTS`,
-    `StoicTA Setups A+B  |  60-day  |  5M  |  2R vs 3R`,
+    `StoicTA A+B  |  60-day  |  5M  |  NY session only  |  Structural stops`,
     `TTrades fractal entries: use 2R column for comparison`,
     ``,
     ...sections,
