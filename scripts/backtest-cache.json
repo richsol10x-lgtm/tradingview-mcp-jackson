@@ -1,155 +1,155 @@
 {
-  "updated": "2026-06-01T15:03:05.577Z",
+  "updated": "2026-06-01T16:04:35.496Z",
   "period": "60d",
   "MNQ": {
     "setupA": {
       "2R": {
-        "count": 3,
-        "wins": 1,
-        "losses": 2,
-        "winRate": 33,
+        "count": 10,
+        "wins": 4,
+        "losses": 6,
+        "winRate": 40,
         "avgWinBars": 0,
         "avgLossBars": 0
       },
       "3R": {
-        "count": 3,
-        "wins": 1,
-        "losses": 2,
-        "winRate": 33,
+        "count": 10,
+        "wins": 2,
+        "losses": 8,
+        "winRate": 20,
         "avgWinBars": 0,
         "avgLossBars": 0
       }
     },
     "setupB": {
       "2R": {
-        "count": 9,
-        "wins": 2,
-        "losses": 7,
-        "winRate": 22,
-        "avgWinBars": 4,
-        "avgLossBars": 13
+        "count": 31,
+        "wins": 9,
+        "losses": 22,
+        "winRate": 29,
+        "avgWinBars": 12,
+        "avgLossBars": 8
       },
       "3R": {
-        "count": 9,
-        "wins": 2,
-        "losses": 7,
-        "winRate": 22,
-        "avgWinBars": 8,
-        "avgLossBars": 13
+        "count": 30,
+        "wins": 7,
+        "losses": 23,
+        "winRate": 23,
+        "avgWinBars": 38,
+        "avgLossBars": 8
       }
     }
   },
   "MES": {
     "setupA": {
       "2R": {
-        "count": 1,
+        "count": 2,
         "wins": 1,
-        "losses": 0,
-        "winRate": 100,
+        "losses": 1,
+        "winRate": 50,
         "avgWinBars": 0,
         "avgLossBars": 0
       },
       "3R": {
-        "count": 1,
+        "count": 2,
         "wins": 1,
-        "losses": 0,
-        "winRate": 100,
+        "losses": 1,
+        "winRate": 50,
         "avgWinBars": 0,
         "avgLossBars": 0
       }
     },
     "setupB": {
       "2R": {
-        "count": 7,
+        "count": 12,
         "wins": 3,
-        "losses": 4,
-        "winRate": 43,
+        "losses": 9,
+        "winRate": 25,
         "avgWinBars": 23,
-        "avgLossBars": 8
+        "avgLossBars": 13
       },
       "3R": {
-        "count": 7,
+        "count": 12,
         "wins": 3,
-        "losses": 4,
-        "winRate": 43,
+        "losses": 9,
+        "winRate": 25,
         "avgWinBars": 47,
-        "avgLossBars": 8
+        "avgLossBars": 13
       }
     }
   },
   "MGC": {
     "setupA": {
       "2R": {
-        "count": 6,
-        "wins": 4,
+        "count": 7,
+        "wins": 5,
         "losses": 2,
-        "winRate": 67,
+        "winRate": 71,
         "avgWinBars": 0,
-        "avgLossBars": 1
+        "avgLossBars": 0
       },
       "3R": {
-        "count": 6,
-        "wins": 3,
+        "count": 7,
+        "wins": 4,
         "losses": 3,
-        "winRate": 50,
+        "winRate": 57,
         "avgWinBars": 0,
-        "avgLossBars": 1
+        "avgLossBars": 3
       }
     },
     "setupB": {
       "2R": {
-        "count": 10,
-        "wins": 3,
-        "losses": 7,
-        "winRate": 30,
-        "avgWinBars": 41,
-        "avgLossBars": 3
+        "count": 23,
+        "wins": 9,
+        "losses": 14,
+        "winRate": 39,
+        "avgWinBars": 32,
+        "avgLossBars": 4
       },
       "3R": {
-        "count": 10,
-        "wins": 3,
-        "losses": 7,
-        "winRate": 30,
-        "avgWinBars": 63,
-        "avgLossBars": 3
+        "count": 22,
+        "wins": 6,
+        "losses": 16,
+        "winRate": 27,
+        "avgWinBars": 56,
+        "avgLossBars": 9
       }
     }
   },
   "SIL": {
     "setupA": {
       "2R": {
-        "count": 8,
-        "wins": 8,
-        "losses": 0,
-        "winRate": 100,
+        "count": 20,
+        "wins": 16,
+        "losses": 4,
+        "winRate": 80,
         "avgWinBars": 0,
         "avgLossBars": 0
       },
       "3R": {
-        "count": 8,
-        "wins": 8,
-        "losses": 0,
-        "winRate": 100,
+        "count": 20,
+        "wins": 14,
+        "losses": 6,
+        "winRate": 70,
         "avgWinBars": 1,
         "avgLossBars": 0
       }
     },
     "setupB": {
       "2R": {
-        "count": 19,
-        "wins": 5,
-        "losses": 14,
-        "winRate": 26,
+        "count": 43,
+        "wins": 14,
+        "losses": 29,
+        "winRate": 33,
         "avgWinBars": 6,
-        "avgLossBars": 9
+        "avgLossBars": 8
       },
       "3R": {
-        "count": 19,
-        "wins": 3,
-        "losses": 16,
-        "winRate": 16,
-        "avgWinBars": 10,
-        "avgLossBars": 11
+        "count": 43,
+        "wins": 10,
+        "losses": 33,
+        "winRate": 23,
+        "avgWinBars": 8,
+        "avgLossBars": 10
       }
     }
   }

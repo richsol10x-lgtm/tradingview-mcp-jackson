@@ -19,10 +19,11 @@ const SYMBOLS = {
   SIL: 'SIL=F',
 };
 
-const MAX_RETEST  = 24;      // bars to wait for retest after break
-const MAX_HOLD    = 100;     // bars to check for target/stop after entry
-const MIN_WICK    = 0.0015;  // SFP wick must extend at least 0.15% beyond the level
-const MIN_BREAK   = 0.001;   // break bar must close at least 0.1% beyond level (conviction)
+const MAX_RETEST     = 24;      // bars to wait for retest after break
+const MAX_HOLD       = 100;     // bars to check for target/stop after entry
+const MIN_WICK       = 0.0015;  // SFP wick must extend at least 0.15% beyond the level
+const MIN_BREAK      = 0.001;   // break bar must close at least 0.1% beyond level (conviction)
+const RETEST_WINDOW  = 0.002;   // retest candle must touch within 0.2% of level (was 0.1%)
 
 // NY session filter — 9:30am to 4:00pm ET only
 function isNYSession(ts) {
@@ -101,45 +102,37 @@ function runSetupA(bars, levels, rMultiplier = 2) {
     const bar  = bars[i];
     const prev = bars[i - 1];
     const lvl  = levels[dateStr(bar.t)];
-    if (!lvl) continue;
+    if (!lvl || !isNYSession(bar.t)) continue;
 
-    if (!isNYSession(bar.t)) continue;
+    const { PDH, PDL, PDC } = lvl;
+    const candidates = [
+      { level: PDH, key: 'PDH-LONG',  dir: 'LONG',  broke: prev.c <= PDH && bar.c > PDH * (1 + MIN_BREAK) },
+      { level: PDL, key: 'PDL-SHORT', dir: 'SHORT', broke: prev.c >= PDL && bar.c < PDL * (1 - MIN_BREAK) },
+      { level: PDC, key: 'PDC-LONG',  dir: 'LONG',  broke: PDC && prev.c <= PDC && bar.c > PDC * (1 + MIN_BREAK) },
+      { level: PDC, key: 'PDC-SHORT', dir: 'SHORT', broke: PDC && prev.c >= PDC && bar.c < PDC * (1 - MIN_BREAK) },
+    ];
 
-    const { PDH, PDL } = lvl;
-    const dayKeyL = `${dateStr(bar.t)}-PDH-LONG`;
-    const dayKeyS = `${dateStr(bar.t)}-PDL-SHORT`;
+    for (const { level, key, dir, broke } of candidates) {
+      if (!level || !broke) continue;
+      const dayKey = `${dateStr(bar.t)}-${key}`;
+      if (usedDays.has(dayKey)) continue;
+      usedDays.add(dayKey);
 
-    if (!usedDays.has(dayKeyL) && prev.c <= PDH && bar.c > PDH * (1 + MIN_BREAK)) {
-      usedDays.add(dayKeyL);
       for (let j = i + 1; j < Math.min(i + MAX_RETEST, bars.length); j++) {
-        if (bars[j].l <= PDH * 1.001 && bars[j].l >= PDH * 0.999) {
-          const entry  = PDH;
-          const stop   = bars[j].l;              // structural — below retest candle low
-          const rDist  = entry - stop;
-          if (rDist <= 0) break;
-          const target = entry + rMultiplier * rDist;
-          const out    = checkOutcome(bars, j + 1, entry, stop, target);
-          if (out.result !== 'EXPIRED')
-            trades.push({ dir: 'LONG', level: 'PDH', entry, stop, target, ...out, date: dateStr(bar.t) });
-          break;
-        }
-      }
-    }
-
-    if (!usedDays.has(dayKeyS) && prev.c >= PDL && bar.c < PDL * (1 - MIN_BREAK)) {
-      usedDays.add(dayKeyS);
-      for (let j = i + 1; j < Math.min(i + MAX_RETEST, bars.length); j++) {
-        if (bars[j].h >= PDL * 0.999 && bars[j].h <= PDL * 1.001) {
-          const entry  = PDL;
-          const stop   = bars[j].h;              // structural — above retest candle high
-          const rDist  = stop - entry;
-          if (rDist <= 0) break;
-          const target = entry - rMultiplier * rDist;
-          const out    = checkOutcome(bars, j + 1, entry, stop, target);
-          if (out.result !== 'EXPIRED')
-            trades.push({ dir: 'SHORT', level: 'PDL', entry, stop, target, ...out, date: dateStr(bar.t) });
-          break;
-        }
+        const rb      = bars[j];
+        const hi      = level * (1 + RETEST_WINDOW);
+        const lo      = level * (1 - RETEST_WINDOW);
+        const touched = dir === 'LONG' ? rb.l <= hi && rb.l >= lo : rb.h >= lo && rb.h <= hi;
+        if (!touched) continue;
+        const entry  = level;
+        const stop   = dir === 'LONG' ? rb.l : rb.h;
+        const rDist  = dir === 'LONG' ? entry - stop : stop - entry;
+        if (rDist <= 0) break;
+        const target = dir === 'LONG' ? entry + rMultiplier * rDist : entry - rMultiplier * rDist;
+        const out    = checkOutcome(bars, j + 1, entry, stop, target);
+        if (out.result !== 'EXPIRED')
+          trades.push({ dir, level: key, entry, stop, target, ...out, date: dateStr(bar.t) });
+        break;
       }
     }
   }
@@ -153,38 +146,30 @@ function runSetupB(bars, levels, rMultiplier = 2) {
   for (let i = 1; i < bars.length - MAX_HOLD; i++) {
     const bar = bars[i];
     const lvl = levels[dateStr(bar.t)];
-    if (!lvl) continue;
+    if (!lvl || !isNYSession(bar.t)) continue;
 
-    if (!isNYSession(bar.t)) continue;
+    const { PDH, PDL, PDC } = lvl;
+    const candidates = [
+      { level: PDH, key: 'PDH-SFP', dir: 'SHORT', sfp: bar.h > PDH * (1 + MIN_WICK) && bar.c < PDH },
+      { level: PDL, key: 'PDL-SFP', dir: 'LONG',  sfp: bar.l < PDL * (1 - MIN_WICK) && bar.c > PDL },
+      { level: PDC, key: 'PDC-HIGH-SFP', dir: 'SHORT', sfp: PDC && bar.h > PDC * (1 + MIN_WICK) && bar.c < PDC },
+      { level: PDC, key: 'PDC-LOW-SFP',  dir: 'LONG',  sfp: PDC && bar.l < PDC * (1 - MIN_WICK) && bar.c > PDC },
+    ];
 
-    const { PDH, PDL } = lvl;
-    const dayKeyL = `${dateStr(bar.t)}-PDL-SFP`;
-    const dayKeyS = `${dateStr(bar.t)}-PDH-SFP`;
+    for (const { level, key, dir, sfp } of candidates) {
+      if (!level || !sfp) continue;
+      const dayKey = `${dateStr(bar.t)}-${key}`;
+      if (usedDays.has(dayKey)) continue;
+      usedDays.add(dayKey);
 
-    if (!usedDays.has(dayKeyL) && bar.l < PDL * (1 - MIN_WICK) && bar.c > PDL) {
-      usedDays.add(dayKeyL);
-      const entry  = bar.c;
-      const stop   = bar.l;
-      const rDist  = entry - stop;
-      if (rDist > 0) {
-        const target = entry + rMultiplier * rDist;
-        const out    = checkOutcome(bars, i + 1, entry, stop, target);
-        if (out.result !== 'EXPIRED')
-          trades.push({ dir: 'LONG', level: 'PDL-SFP', entry, stop, target, ...out, date: dateStr(bar.t) });
-      }
-    }
-
-    if (!usedDays.has(dayKeyS) && bar.h > PDH * (1 + MIN_WICK) && bar.c < PDH) {
-      usedDays.add(dayKeyS);
-      const entry  = bar.c;
-      const stop   = bar.h;
-      const rDist  = stop - entry;
-      if (rDist > 0) {
-        const target = entry - rMultiplier * rDist;
-        const out    = checkOutcome(bars, i + 1, entry, stop, target);
-        if (out.result !== 'EXPIRED')
-          trades.push({ dir: 'SHORT', level: 'PDH-SFP', entry, stop, target, ...out, date: dateStr(bar.t) });
-      }
+      const entry = bar.c;
+      const stop  = dir === 'LONG' ? bar.l : bar.h;
+      const rDist = dir === 'LONG' ? entry - stop : stop - entry;
+      if (rDist <= 0) continue;
+      const target = dir === 'LONG' ? entry + rMultiplier * rDist : entry - rMultiplier * rDist;
+      const out    = checkOutcome(bars, i + 1, entry, stop, target);
+      if (out.result !== 'EXPIRED')
+        trades.push({ dir, level: key, entry, stop, target, ...out, date: dateStr(bar.t) });
     }
   }
   return trades;

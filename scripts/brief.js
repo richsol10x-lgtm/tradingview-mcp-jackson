@@ -168,10 +168,10 @@ STOP RULES:
 Answer in two labeled sections. Be SHORT. Plain text only, no markdown. Talk like a trading partner — tell what the rules say, not what you predict.
 
 STOICTA:
-Near a daily level? Which level? SFP or B&R forming? If no level nearby, say "No level — N/A."
+Near a daily level? Which level? SFP or B&R forming? Give a 0–100% likelihood this setup plays out right now based on how clearly it's forming, how clean the level is, and the backtest EV. If no level nearby, say "No level — N/A."
 
 TTRADES:
-Fractal direction + Daily/4H/15M alignment? Continuation check: real continuation or consolidation, sweep happening, HTF target already met? Nearest untouched swing for partial, next HTF swing for runner (fib only if no clear structure). What invalidates.`;
+Fractal direction + Daily/4H/15M alignment? Give a 0–100% likelihood this plays out based on how many TFs agree, whether it's real continuation or consolidation, and whether a sweep is happening. Continuation check: sweep happening, HTF target already met? Nearest untouched swing for partial, next HTF swing for runner (fib only if no clear structure). What invalidates.`;
 
 async function advisory(results, key, newsEvents = []) {
   const fmt    = n => n?.toLocaleString('en-US', { maximumFractionDigits: 2 }) ?? '—';
@@ -207,6 +207,14 @@ async function advisory(results, key, newsEvents = []) {
 
   const fractalCtx = formatFractalContext(key, price);
 
+  const ev = (wr, r) => wr != null ? ((wr / 100 * r) - (1 - wr / 100)).toFixed(2) : '?';
+  const sA2 = bt.setupA?.['2R'], sA3 = bt.setupA?.['3R'];
+  const sB2 = bt.setupB?.['2R'], sB3 = bt.setupB?.['3R'];
+  const btStr = sA3 && sB3 ? [
+    `B&R: 2R=${sA2.winRate}% (EV ${ev(sA2.winRate,2)}R) | 3R=${sA3.winRate}% (EV ${ev(sA3.winRate,3)}R) — ${sA3.count} trades`,
+    `SFP: 2R=${sB2.winRate}% (EV ${ev(sB2.winRate,2)}R) | 3R=${sB3.winRate}% (EV ${ev(sB3.winRate,3)}R) — ${sB3.count} trades`,
+  ].join('\n') : 'No backtest data';
+
   const prompt = `Ticker: ${key} | Price: ${fmt(price)} | Session: ${etTime} ET (${session})
 Near daily levels: ${nearLevels.length ? nearLevels.join(', ') : 'NONE'}
 
@@ -225,7 +233,8 @@ All daily levels:
   HCOM: ${fmt(lvl.HCOM)}  LCOM: ${fmt(lvl.LCOM)}
   PWH: ${fmt(lvl.PWH)}  PWL: ${fmt(lvl.PWL)}
 
-Backtest win rates (StoicTA @ 3R): B&R ${bt.setupA?.['3R']?.winRate ?? '?'}% | SFP ${bt.setupB?.['3R']?.winRate ?? '?'}%
+Backtest (60d, StoicTA):
+${btStr}
 
 High-impact news today:
 ${newsStr}${flagStr}
