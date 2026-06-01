@@ -1,76 +1,156 @@
 {
-  "updated": "2026-06-01T11:29:21.185Z",
+  "updated": "2026-06-01T15:03:05.577Z",
   "period": "60d",
   "MNQ": {
     "setupA": {
-      "count": 12,
-      "wins": 5,
-      "losses": 7,
-      "winRate": 42,
-      "avgWinBars": 5,
-      "avgLossBars": 35
+      "2R": {
+        "count": 3,
+        "wins": 1,
+        "losses": 2,
+        "winRate": 33,
+        "avgWinBars": 0,
+        "avgLossBars": 0
+      },
+      "3R": {
+        "count": 3,
+        "wins": 1,
+        "losses": 2,
+        "winRate": 33,
+        "avgWinBars": 0,
+        "avgLossBars": 0
+      }
     },
     "setupB": {
-      "count": 10,
-      "wins": 3,
-      "losses": 7,
-      "winRate": 30,
-      "avgWinBars": 11,
-      "avgLossBars": 9
+      "2R": {
+        "count": 9,
+        "wins": 2,
+        "losses": 7,
+        "winRate": 22,
+        "avgWinBars": 4,
+        "avgLossBars": 13
+      },
+      "3R": {
+        "count": 9,
+        "wins": 2,
+        "losses": 7,
+        "winRate": 22,
+        "avgWinBars": 8,
+        "avgLossBars": 13
+      }
     }
   },
   "MES": {
     "setupA": {
-      "count": 9,
-      "wins": 4,
-      "losses": 5,
-      "winRate": 44,
-      "avgWinBars": 9,
-      "avgLossBars": 18
+      "2R": {
+        "count": 1,
+        "wins": 1,
+        "losses": 0,
+        "winRate": 100,
+        "avgWinBars": 0,
+        "avgLossBars": 0
+      },
+      "3R": {
+        "count": 1,
+        "wins": 1,
+        "losses": 0,
+        "winRate": 100,
+        "avgWinBars": 0,
+        "avgLossBars": 0
+      }
     },
     "setupB": {
-      "count": 9,
-      "wins": 5,
-      "losses": 4,
-      "winRate": 56,
-      "avgWinBars": 38,
-      "avgLossBars": 8
+      "2R": {
+        "count": 7,
+        "wins": 3,
+        "losses": 4,
+        "winRate": 43,
+        "avgWinBars": 23,
+        "avgLossBars": 8
+      },
+      "3R": {
+        "count": 7,
+        "wins": 3,
+        "losses": 4,
+        "winRate": 43,
+        "avgWinBars": 47,
+        "avgLossBars": 8
+      }
     }
   },
   "MGC": {
     "setupA": {
-      "count": 19,
-      "wins": 11,
-      "losses": 8,
-      "winRate": 58,
-      "avgWinBars": 22,
-      "avgLossBars": 32
+      "2R": {
+        "count": 6,
+        "wins": 4,
+        "losses": 2,
+        "winRate": 67,
+        "avgWinBars": 0,
+        "avgLossBars": 1
+      },
+      "3R": {
+        "count": 6,
+        "wins": 3,
+        "losses": 3,
+        "winRate": 50,
+        "avgWinBars": 0,
+        "avgLossBars": 1
+      }
     },
     "setupB": {
-      "count": 18,
-      "wins": 4,
-      "losses": 14,
-      "winRate": 22,
-      "avgWinBars": 28,
-      "avgLossBars": 11
+      "2R": {
+        "count": 10,
+        "wins": 3,
+        "losses": 7,
+        "winRate": 30,
+        "avgWinBars": 41,
+        "avgLossBars": 3
+      },
+      "3R": {
+        "count": 10,
+        "wins": 3,
+        "losses": 7,
+        "winRate": 30,
+        "avgWinBars": 63,
+        "avgLossBars": 3
+      }
     }
   },
   "SIL": {
     "setupA": {
-      "count": 35,
-      "wins": 19,
-      "losses": 16,
-      "winRate": 54,
-      "avgWinBars": 3,
-      "avgLossBars": 6
+      "2R": {
+        "count": 8,
+        "wins": 8,
+        "losses": 0,
+        "winRate": 100,
+        "avgWinBars": 0,
+        "avgLossBars": 0
+      },
+      "3R": {
+        "count": 8,
+        "wins": 8,
+        "losses": 0,
+        "winRate": 100,
+        "avgWinBars": 1,
+        "avgLossBars": 0
+      }
     },
     "setupB": {
-      "count": 39,
-      "wins": 14,
-      "losses": 25,
-      "winRate": 36,
-      "avgWinBars": 16,
-      "avgLossBars": 10
+      "2R": {
+        "count": 19,
+        "wins": 5,
+        "losses": 14,
+        "winRate": 26,
+        "avgWinBars": 6,
+        "avgLossBars": 9
+      },
+      "3R": {
+        "count": 19,
+        "wins": 3,
+        "losses": 16,
+        "winRate": 16,
+        "avgWinBars": 10,
+        "avgLossBars": 11
+      }
     }
   }
 }

@@ -165,13 +165,13 @@ STOP RULES:
 - Do NOT move to BE at 1:1. Trail to below most recent rejection zone once 1.5R cleared.
 - Price commonly rejects 20-40% into the swing before continuing — real stop sits below that rejection zone.
 
-Answer in this exact order. Be SHORT. Plain text only, no markdown. Talk like a trading partner — tell what the rules say, not what you predict:
-1. Near a daily level? If yes — which level and is there an SFP or B&R forming?
-2. If no level nearby — is Daily/4H/15M fractal aligned? What direction?
-3. Bias: bullish/bearish/neutral + one plain English reason from the rules.
-4. Continuation check: real continuation or consolidation? Sweep happening? Higher TF target already met?
-5. Target: nearest untouched swing high/low for partial, next higher TF swing for runner. Only use fib if no clear structure.
-6. What invalidates this setup.`;
+Answer in two labeled sections. Be SHORT. Plain text only, no markdown. Talk like a trading partner — tell what the rules say, not what you predict.
+
+STOICTA:
+Near a daily level? Which level? SFP or B&R forming? If no level nearby, say "No level — N/A."
+
+TTRADES:
+Fractal direction + Daily/4H/15M alignment? Continuation check: real continuation or consolidation, sweep happening, HTF target already met? Nearest untouched swing for partial, next HTF swing for runner (fib only if no clear structure). What invalidates.`;
 
 async function advisory(results, key, newsEvents = []) {
   const fmt    = n => n?.toLocaleString('en-US', { maximumFractionDigits: 2 }) ?? '—';
