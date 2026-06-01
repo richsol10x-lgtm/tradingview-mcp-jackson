@@ -15,6 +15,7 @@ const env       = require('dotenv').config({ path: join(__dirname, '../.env') })
 const TOKEN     = env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID   = String(env.TELEGRAM_CHAT_ID);
 const BRIEF     = join(__dirname, 'brief.js');
+const BACKTEST  = join(__dirname, 'backtest.js');
 const TICKERS   = ['MNQ', 'MES', 'MGC', 'SIL'];
 
 if (!TOKEN || !CHAT_ID) {
@@ -30,9 +31,9 @@ async function send(text) {
   });
 }
 
-function runBrief(arg) {
+function runScript(scriptPath, arg) {
   return new Promise(resolve => {
-    const args = arg ? [BRIEF, arg] : [BRIEF];
+    const args = arg ? [scriptPath, arg] : [scriptPath];
     const child = spawn(process.execPath, args, { cwd: join(__dirname, '..') });
     child.stderr.on('data', d => process.stderr.write(d));
     child.on('close', resolve);
@@ -44,23 +45,41 @@ async function handleMessage(text) {
 
   if (cmd === 'brief all' || cmd === 'brief') {
     await send('Running full brief — one moment...');
-    await runBrief(null);
+    await runScript(BRIEF, null);
     return;
   }
 
-  const match = cmd.match(/^brief\s+([a-z]+)$/i);
-  if (match) {
-    const ticker = match[1].toUpperCase();
+  const briefMatch = cmd.match(/^brief\s+([a-z]+)$/i);
+  if (briefMatch) {
+    const ticker = briefMatch[1].toUpperCase();
     if (TICKERS.includes(ticker)) {
       await send(`Running ${ticker} brief — one moment...`);
-      await runBrief(ticker);
+      await runScript(BRIEF, ticker);
       return;
     }
-    await send(`Unknown ticker "${ticker}". Valid options: ${TICKERS.join(', ')}`);
+    await send(`Unknown ticker "${ticker}". Valid: ${TICKERS.join(', ')}`);
     return;
   }
 
-  await send(`Commands:\n• brief all — full brief (all tickers)\n• brief MNQ — single ticker\n• brief MES\n• brief MGC\n• brief SIL`);
+  if (cmd === 'backtest' || cmd === 'backtest all') {
+    await send('Running 60-day backtest — takes ~15 seconds...');
+    await runScript(BACKTEST, null);
+    return;
+  }
+
+  const btMatch = cmd.match(/^backtest\s+([a-z]+)$/i);
+  if (btMatch) {
+    const ticker = btMatch[1].toUpperCase();
+    if (TICKERS.includes(ticker)) {
+      await send(`Running ${ticker} backtest — one moment...`);
+      await runScript(BACKTEST, ticker);
+      return;
+    }
+    await send(`Unknown ticker "${ticker}". Valid: ${TICKERS.join(', ')}`);
+    return;
+  }
+
+  await send(`Commands:\n• brief all\n• brief MNQ / MES / MGC / SIL\n• backtest all\n• backtest MNQ / MES / MGC / SIL`);
 }
 
 async function poll() {

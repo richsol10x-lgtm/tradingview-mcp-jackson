@@ -1,0 +1,76 @@
+{
+  "updated": "2026-06-01T11:29:21.185Z",
+  "period": "60d",
+  "MNQ": {
+    "setupA": {
+      "count": 12,
+      "wins": 5,
+      "losses": 7,
+      "winRate": 42,
+      "avgWinBars": 5,
+      "avgLossBars": 35
+    },
+    "setupB": {
+      "count": 10,
+      "wins": 3,
+      "losses": 7,
+      "winRate": 30,
+      "avgWinBars": 11,
+      "avgLossBars": 9
+    }
+  },
+  "MES": {
+    "setupA": {
+      "count": 9,
+      "wins": 4,
+      "losses": 5,
+      "winRate": 44,
+      "avgWinBars": 9,
+      "avgLossBars": 18
+    },
+    "setupB": {
+      "count": 9,
+      "wins": 5,
+      "losses": 4,
+      "winRate": 56,
+      "avgWinBars": 38,
+      "avgLossBars": 8
+    }
+  },
+  "MGC": {
+    "setupA": {
+      "count": 19,
+      "wins": 11,
+      "losses": 8,
+      "winRate": 58,
+      "avgWinBars": 22,
+      "avgLossBars": 32
+    },
+    "setupB": {
+      "count": 18,
+      "wins": 4,
+      "losses": 14,
+      "winRate": 22,
+      "avgWinBars": 28,
+      "avgLossBars": 11
+    }
+  },
+  "SIL": {
+    "setupA": {
+      "count": 35,
+      "wins": 19,
+      "losses": 16,
+      "winRate": 54,
+      "avgWinBars": 3,
+      "avgLossBars": 6
+    },
+    "setupB": {
+      "count": 39,
+      "wins": 14,
+      "losses": 25,
+      "winRate": 36,
+      "avgWinBars": 16,
+      "avgLossBars": 10
+    }
+  }
+}

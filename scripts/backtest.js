@@ -6,6 +6,7 @@
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { writeFileSync } from 'fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const require   = createRequire(import.meta.url);
@@ -207,20 +208,43 @@ function report(ticker, setupA, setupB) {
 
 async function analyzeTicker(key) {
   const sym = SYMBOLS[key];
-  try {
-    const [bars5m, barsDaily] = await Promise.all([
-      fetchOHLCV(sym, '5m', '60d'),
-      fetchOHLCV(sym, '1d', '6mo'),
-    ]);
+  const [bars5m, barsDaily] = await Promise.all([
+    fetchOHLCV(sym, '5m', '60d'),
+    fetchOHLCV(sym, '1d', '6mo'),
+  ]);
+  const levels = buildDailyLevels(barsDaily);
+  const setupA = runSetupA(bars5m, levels);
+  const setupB = runSetupB(bars5m, levels);
+  return { key, setupA: stats(setupA), setupB: stats(setupB) };
+}
 
-    const levels = buildDailyLevels(barsDaily);
-    const setupA = runSetupA(bars5m, levels);
-    const setupB = runSetupB(bars5m, levels);
+function formatReport(results) {
+  const avgMins = b => b * 5;
+  const sections = results.map(({ key, setupA: sA, setupB: sB }) => [
+    `━━━━━━━━━━━━━━━━━━━━━━`,
+    `${key} — 60-Day Backtest (5M bars)`,
+    ``,
+    `Setup A — Break & Retest (PDH/PDL)`,
+    sA.count
+      ? `  Trades: ${sA.count}  |  Win: ${sA.winRate}%  (${sA.wins}W/${sA.losses}L)\n  ~${avgMins(sA.avgWinBars)}min to target  |  ~${avgMins(sA.avgLossBars)}min to stop`
+      : `  No setups found`,
+    ``,
+    `Setup B — SFP (PDH/PDL wick reversal)`,
+    sB.count
+      ? `  Trades: ${sB.count}  |  Win: ${sB.winRate}%  (${sB.wins}W/${sB.losses}L)\n  ~${avgMins(sB.avgWinBars)}min to target  |  ~${avgMins(sB.avgLossBars)}min to stop`
+      : `  No setups found`,
+  ].join('\n'));
 
-    return report(key, setupA, setupB);
-  } catch (e) {
-    return `━━━━━━━━━━━━━━━━━━━━━━\n${key} — ERROR: ${e.message}`;
-  }
+  return [
+    `📊 STOIC TA — BACKTEST RESULTS`,
+    `Setup A + B  |  60-day  |  5M  |  2:1 R:R`,
+    ``,
+    ...sections,
+    ``,
+    `━━━━━━━━━━━━━━━━━━━━━━`,
+    `Setup C excluded — requires human fib anchoring.`,
+    `Mechanical approximation only — real execution will vary.`,
+  ].join('\n');
 }
 
 async function main() {
@@ -228,29 +252,30 @@ async function main() {
   const keys = arg && SYMBOLS[arg] ? [arg] : Object.keys(SYMBOLS);
 
   console.log(`Running backtest for: ${keys.join(', ')} — please wait...`);
-  const sections = await Promise.all(keys.map(analyzeTicker));
 
-  const output = [
-    `📊 STOIC TA — BACKTEST RESULTS`,
-    `Setup A + B  |  60-day  |  5M bars  |  2:1 R:R target`,
-    `Stop: 0.25% beyond level  |  Retest window: 2hrs  |  Max hold: 8hrs`,
-    ``,
-    ...sections,
-    ``,
-    `━━━━━━━━━━━━━━━━━━━━━━`,
-    `Note: Setup C (Fib Geometry) requires human judgement — not included.`,
-    `Results are mechanical approximations — real execution will vary.`,
-  ].join('\n');
+  const results = await Promise.all(keys.map(async key => {
+    try {
+      return await analyzeTicker(key);
+    } catch (e) {
+      return { key, error: e.message, setupA: { count: 0 }, setupB: { count: 0 } };
+    }
+  }));
 
+  // Save cache for brief.js to read
+  const cache = { updated: new Date().toISOString(), period: '60d' };
+  for (const r of results) cache[r.key] = { setupA: r.setupA, setupB: r.setupB };
+  writeFileSync(join(__dirname, 'backtest-cache.json'), JSON.stringify(cache, null, 2));
+  console.log('Cache saved → scripts/backtest-cache.json');
+
+  const output = formatReport(results);
   console.log('\n' + output);
 
-  // Also send to Telegram if configured
   if (env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID) {
     const r = await fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, text: output }),
     });
-    console.log((await r.json()).ok ? '\ntelegram: sent' : '\ntelegram: FAILED');
+    console.log((await r.json()).ok ? 'telegram: sent' : 'telegram: FAILED');
   }
 }
 

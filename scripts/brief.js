@@ -21,9 +21,11 @@ const SYMBOLS = {
 
 // Load Stoic Edge levels cache (written by Claude Code when TradingView is open)
 let LEVELS = {};
-try {
-  LEVELS = JSON.parse(readFileSync(join(__dirname, 'levels.json'), 'utf8'));
-} catch {}
+try { LEVELS = JSON.parse(readFileSync(join(__dirname, 'levels.json'), 'utf8')); } catch {}
+
+// Load backtest stats cache (written by backtest.js)
+let BTSTATS = {};
+try { BTSTATS = JSON.parse(readFileSync(join(__dirname, 'backtest-cache.json'), 'utf8')); } catch {}
 
 // Timeframes to analyse — order matters (top-down)
 const TIMEFRAMES = [
@@ -157,12 +159,26 @@ async function analyzeTicker(key) {
       `HCOM: ${fmt(lvl.HCOM)}  LCOM: ${fmt(lvl.LCOM)}`,
     ] : [];
 
+    const bt  = BTSTATS[key];
+    const btLines = bt?.setupA?.count ? (() => {
+      const sA = bt.setupA;
+      const sB = bt.setupB;
+      const aLine = sA.count
+        ? `A: ${sA.winRate}% (${sA.count} trades) ~${sA.avgWinBars*5}min to target`
+        : `A: no data`;
+      const bLine = sB.count
+        ? `B: ${sB.winRate}% (${sB.count} trades) ~${sB.avgWinBars*5}min to target`
+        : `B: no data`;
+      return [``, `Stats (60d backtest):`, aLine, bLine];
+    })() : [];
+
     return [
       `━━━━━━━━━━━━━━━━━━━━━━`,
       `${sym.label} — ${fmt(results[3].price)}`,
       ``,
       ...results.map(r => r.line),
       ...lvlLines,
+      ...btLines,
       ``,
       `Advisory: ${adv}`,
     ].join('\n');
