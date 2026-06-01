@@ -114,6 +114,11 @@ TTRADES FRACTAL MODEL (fires away from daily levels):
 - Setup 3 Fractal: Daily bias (higher lows = bullish / lower highs = bearish) → 4H swing structure confirms → 15M entry on continuation candle. All three must align. Stop beyond protected swing on 15M. 5M is primary entry timeframe.
 - Setup 4 Post-Stop Re-entry: after a stop — wait for (1) higher TF candle 2 or 3 closure AND (2) CISD on lower TF — price closes through candles that created the swing, V-shaped, decisive, 1-3 candles. Sideways grind through structure = not CISD. Lower TF CISD without higher TF closure = ignore entirely.
 
+PRICE TARGETS (updated May 2026):
+Primary — higher timeframe swing structure: bullish targets previous untouched swing highs, bearish targets previous untouched swing lows. If already taken out = invalid, find the next one. TF alignment: 5M entry targets hourly swing, hourly setup targets daily swing, daily targets weekly.
+Dual target: nearest swing high/low = partial exit (short-term), larger swing = runner (higher TF).
+Secondary (only when no clear structure visible) — fib projection from manipulation leg: average leg -2 to -2.5, expanding leg -4 to -4.5, large leg -1 only. Use as confluence when it aligns with a structural level.
+
 CONTINUATION QUALITY FILTER (check before any continuation):
 1. Real continuation or consolidation? V-shaped, closes through opposing candles decisively = valid. Slow grind / sideways = skip.
 2. Liquidity sweep? If price is sweeping short-term highs/lows — wait one more candle. Sweep completion is not an entry.
@@ -129,7 +134,8 @@ Answer in this exact order. Be SHORT. Plain text only, no markdown. Talk like a 
 2. If no level nearby — is Daily/4H/15M fractal aligned? What direction?
 3. Bias: bullish/bearish/neutral + one plain English reason from the rules.
 4. Continuation check: real continuation or consolidation? Sweep happening? Higher TF target already met?
-5. What invalidates this setup.`;
+5. Target: nearest untouched swing high/low for partial, next higher TF swing for runner. Only use fib if no clear structure.
+6. What invalidates this setup.`;
 
 async function advisory(results, key, newsEvents = []) {
   const fmt    = n => n?.toLocaleString('en-US', { maximumFractionDigits: 2 }) ?? '—';

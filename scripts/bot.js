@@ -170,7 +170,7 @@ Answer these 6 points:
 2. Which setup gets stopped most?
 3. How many stopped trades moved to TP after? (stop placement issue)
 4. CISD present on valid re-entries vs skipped?
-5. Projection targets: hit, overshot, or undershot?
+5. Targets: swing structure targets reached? When fib used instead of structure, did it hit?
 6. ONE specific thing to tighten.
 
 Then flag any of these if triggered:
