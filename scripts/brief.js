@@ -26,6 +26,11 @@ function sma(closes, length) {
 
 function bias(price, sma20, sma200) {
   if (sma20 === null || sma200 === null) return { label: 'INSUFFICIENT DATA', reason: 'Not enough bars for SMA 200' };
+
+  const spread = Math.abs(sma20 - sma200) / sma200;
+  if (spread < 0.001)
+    return { label: 'AT THE CROSS', reason: `20 SMA (${sma20.toFixed(2)}) and 200 SMA (${sma200.toFixed(2)}) are within 0.1% — direction is unreliable. Wait for a clear separation before trading.` };
+
   const above20 = price > sma20;
   const above200 = price > sma200;
   const ribbon_bull = sma20 > sma200;
