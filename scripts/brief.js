@@ -3,6 +3,7 @@
 // Multi-timeframe brief: Daily → 4H → 1H → 5M
 // Computes SMA 20 + 200 on each TF, applies StoicTA bias rules, gives one advisory.
 
+import Anthropic from '@anthropic-ai/sdk';
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -95,60 +96,82 @@ async function analyzeTF(yahooSymbol, tf) {
   };
 }
 
-function advisory(results, key) {
-  const totalScore = results.reduce((s, r) => s + r.bias.score, 0);
+const anthropic = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
+
+const ADVISORY_SYSTEM = `You are a StoicTA trading advisor for a micro futures day trader. StoicTA uses Fibonacci geometry, SBS (Structure Break + Sweep), and Daily Levels (PDH/PDL/PDC, HCOM/LCOM, PWH/PWL).
+
+Setup A: price breaks a key level, pulls back to retest it from the other side, enter on the 5M 20 SMA confluence. Target 2.618 fib extension.
+Setup B: price sweeps a key level (SFP wick), fails to close through it, reverses. Enter on the SFP candle close.
+
+Write 2-3 sentences of specific, actionable advisory. Rules:
+- Reference actual price numbers from the data
+- Name the specific setup (A or B), the specific level to watch, and why
+- If there is a news event within 60 minutes, warn to sit out or reduce size
+- If timeframes conflict badly, say so directly and tell them to wait
+- Never write vague statements like "watch for opportunities" or "the market is mixed"
+- Be direct. No fluff.`;
+
+async function advisory(results, key, newsEvents = []) {
+  const fmt   = n => n?.toLocaleString('en-US', { maximumFractionDigits: 2 }) ?? '—';
   const daily = results[0];
   const tf4h  = results[1];
   const tf1h  = results[2];
   const tf5m  = results[3];
   const lvl   = LEVELS[key] || {};
-
-  const dailyBull = daily.bias.score > 0;
-  const dailyBear = daily.bias.score < 0;
-  const lowerBull = [tf4h, tf1h, tf5m].filter(r => r.bias.score > 0).length;
-  const lowerBear = [tf4h, tf1h, tf5m].filter(r => r.bias.score < 0).length;
-  const fmt       = n => n?.toLocaleString('en-US', { maximumFractionDigits: 2 }) ?? '—';
-
-  // Level context — where is price relative to PDH/PDL/PDC?
+  const bt    = BTSTATS[key] || {};
   const price = tf5m.price;
-  let levelCtx = '';
-  if (lvl.PDH && lvl.PDL && lvl.PDC) {
-    if (price > lvl.PDH)
-      levelCtx = ` Price is ABOVE PDH (${fmt(lvl.PDH)}) — trading in premium, watch for Setup A retest of PDH from above or SFP rejection.`;
-    else if (price < lvl.PDL)
-      levelCtx = ` Price is BELOW PDL (${fmt(lvl.PDL)}) — trading in discount, watch for Setup A retest of PDL from below or SFP reversal back above.`;
-    else if (Math.abs(price - lvl.PDH) < Math.abs(price - lvl.PDL))
-      levelCtx = ` Price is approaching PDH (${fmt(lvl.PDH)}) — key resistance. Watch for Setup A breakout above or Setup B SFP rejection.`;
-    else
-      levelCtx = ` Price is near PDC (${fmt(lvl.PDC)}) / PDL (${fmt(lvl.PDL)}) — key support zone. Watch for Setup B SFP long or break below.`;
+
+  const now = new Date();
+  const etTime = now.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false });
+  const etHour = parseInt(now.toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }));
+  const session = etHour < 9 ? 'pre-market' : etHour < 12 ? 'NY morning' : etHour < 16 ? 'NY afternoon' : 'after-hours';
+
+  const newsStr = newsEvents.length
+    ? newsEvents.map(e => `  ${e.time} ET — ${e.title}${e.forecast ? ` (Forecast: ${e.forecast})` : ''}`).join('\n')
+    : '  None today';
+
+  const prompt = `Ticker: ${key} | Price: ${fmt(price)} | Session: ${etTime} ET (${session})
+
+Timeframe bias:
+  Daily: ${daily.bias.label} (SMA20: ${fmt(daily.sma20)}, SMA200: ${fmt(daily.sma200)})
+  4H:    ${tf4h.bias.label}  (SMA20: ${fmt(tf4h.sma20)}, SMA200: ${fmt(tf4h.sma200)})
+  1H:    ${tf1h.bias.label}  (SMA20: ${fmt(tf1h.sma20)}, SMA200: ${fmt(tf1h.sma200)})
+  5M:    ${tf5m.bias.label}  (SMA20: ${fmt(tf5m.sma20)}, SMA200: ${fmt(tf5m.sma200)})
+
+Stoic Edge levels:
+  PDH: ${fmt(lvl.PDH)}  PDC: ${fmt(lvl.PDC)}  PDL: ${fmt(lvl.PDL)}
+  HCOM: ${fmt(lvl.HCOM)}  LCOM: ${fmt(lvl.LCOM)}
+  PWH: ${fmt(lvl.PWH)}  PWL: ${fmt(lvl.PWL)}
+
+Backtest (60d): Setup A ${bt.setupA?.winRate ?? '?'}% win rate | Setup B ${bt.setupB?.winRate ?? '?'}% win rate
+
+High-impact news today:
+${newsStr}
+
+Write the advisory now.`;
+
+  try {
+    const msg = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 200,
+      system: ADVISORY_SYSTEM,
+      messages: [{ role: 'user', content: prompt }],
+    });
+    return msg.content[0].text.trim();
+  } catch {
+    // Fallback to score-based canned text if API fails
+    const totalScore = results.reduce((s, r) => s + r.bias.score, 0);
+    if (totalScore >= 4)  return `Full bull alignment. Setup A: retest of 5M 20 SMA (${fmt(tf5m.sma20)}) or PDC (${fmt(lvl.PDC)}) from above.`;
+    if (totalScore <= -4) return `Full bear alignment. Setup A: rejection at 5M 20 SMA (${fmt(tf5m.sma20)}) or PDC (${fmt(lvl.PDC)}) from below.`;
+    return `Timeframes mixed — no clear edge. Wait for daily and 4H to agree.`;
   }
-
-  if (totalScore >= 6)
-    return `Full bull alignment. Longs only. Setup A: retest of 5M 20 SMA (${fmt(tf5m.sma20)}) or PDC (${fmt(lvl.PDC ?? '—')}) from above. Target 2.618 fib extension.${levelCtx}`;
-
-  if (totalScore <= -6)
-    return `Full bear alignment. Shorts only. Setup A: rejection at 5M 20 SMA (${fmt(tf5m.sma20)}) or PDC (${fmt(lvl.PDC ?? '—')}) from below. Target 2.618 fib extension.${levelCtx}`;
-
-  if (dailyBull && lowerBear >= 2)
-    return `Pullback within a daily uptrend. No longs until 4H and 1H recover. Watch for Setup B SFP long at PDL (${fmt(lvl.PDL ?? '—')}) or PDC (${fmt(lvl.PDC ?? '—')}). No shorts against the daily.${levelCtx}`;
-
-  if (dailyBear && lowerBull >= 2)
-    return `Bounce within a daily downtrend. Do not chase longs. Wait for the bounce to fail at PDC (${fmt(lvl.PDC ?? '—')}) or PDH (${fmt(lvl.PDH ?? '—')}), then look for Setup A short.${levelCtx}`;
-
-  if (dailyBull && lowerBull >= 2)
-    return `Daily + lower TFs bullish. Longs are the play. Setup A retest of 5M 20 SMA (${fmt(tf5m.sma20)}) or PDC (${fmt(lvl.PDC ?? '—')}). Keep stops tight.${levelCtx}`;
-
-  if (dailyBear && lowerBear >= 2)
-    return `Daily + lower TFs bearish. Shorts are the play. Setup A rejection at 5M 20 SMA (${fmt(tf5m.sma20)}) or PDC (${fmt(lvl.PDC ?? '—')}). Keep stops tight.${levelCtx}`;
-
-  return `Timeframes are mixed — no clear edge. Sit on hands. Wait for daily and 4H to agree.${levelCtx}`;
 }
 
-async function analyzeTicker(key) {
+async function analyzeTicker(key, newsEvents = []) {
   const sym = SYMBOLS[key];
   try {
     const results = await Promise.all(TIMEFRAMES.map(tf => analyzeTF(sym.yahoo, tf)));
-    const adv  = advisory(results, key);
+    const adv  = await advisory(results, key, newsEvents);
     const fmt  = n => n?.toLocaleString('en-US', { maximumFractionDigits: 2 }) ?? '—';
     const lvl  = LEVELS[key];
     const lvlLines = lvl ? [
@@ -196,7 +219,23 @@ async function main() {
     month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
   });
 
-  const sections = await Promise.all(keys.map(analyzeTicker));
+  // Fetch today's news once, pass to all tickers
+  let newsEvents = [];
+  try {
+    const newsRes = await fetch('https://nfs.faireconomy.media/ff_calendar_thisweek.json', { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    const allEvents = await newsRes.json();
+    const todayET = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    newsEvents = allEvents
+      .filter(e => e.impact === 'High' && ['USD', 'XAU', 'XAG'].includes(e.country))
+      .filter(e => new Date(e.date).toLocaleDateString('en-CA', { timeZone: 'America/New_York' }) === todayET)
+      .map(e => ({
+        time: new Date(e.date).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false }),
+        title: e.title,
+        forecast: e.forecast || null,
+      }));
+  } catch { /* ForexFactory down — continue without news */ }
+
+  const sections = await Promise.all(keys.map(k => analyzeTicker(k, newsEvents)));
 
   const msg = [
     `📊 STOIC TA — ${arg ?? 'SESSION BRIEF'}`,

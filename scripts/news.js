@@ -114,4 +114,7 @@ async function main() {
   }
 }
 
-main().catch(e => { console.error(e); process.exit(1); });
+// Only run when executed directly, not when imported by bot.js
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch(e => { console.error(e); process.exit(1); });
+}
