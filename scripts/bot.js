@@ -9,7 +9,7 @@ import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { spawn } from 'child_process';
-import { readFileSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
 import { getUpcoming, getTodayEvents } from './news.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -81,6 +81,7 @@ checkUpcomingEvents(); // run immediately on start
 
 // --- Free-form Q&A against last brief ---
 const BRIEF_CACHE = join(__dirname, 'brief-cache.json');
+const TRADE_LOG   = join(__dirname, 'trade-log.json');
 
 const QA_SYSTEM = `You are a StoicTA trading advisor. Answer questions about the last market brief in 2-3 sentences. Reference specific price levels and setup names (A or B). Be direct — no fluff. Plain text only — no markdown, no bold, no asterisks.
 
@@ -123,6 +124,104 @@ async function askAdvisory(question) {
   }
 }
 
+// --- Trade logging & review ---
+const PARSE_SYSTEM = `Extract trade fields from a plain-English trade report. Return ONLY valid JSON, no markdown, no explanation.`;
+
+async function parseTrade(description) {
+  const prompt = `Trade: "${description}"
+
+Extract these fields (use null if unknown):
+- setup: "SFP" | "B&R" | "Fractal" | "Post-Stop" | null
+- ticker: "MNQ" | "MES" | "MGC" | "SIL" | null
+- nearDailyLevel: true | false | null
+- stopStructural: true | false | null
+- cisdConfirmed: true | false | null
+- projectionUsed: true | false | null
+- rejectionZoneDip: true | false | null
+- beAt1r1: true | false | null
+- outcome: "TP" | "SL" | "BE" | "open" | null
+- rMultiple: number | null
+- notes: string | null`;
+
+  try {
+    const msg = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 300,
+      system: PARSE_SYSTEM,
+      messages: [{ role: 'user', content: prompt }],
+    });
+    return JSON.parse(msg.content[0].text.trim());
+  } catch { return { notes: description }; }
+}
+
+async function runReview(trades) {
+  const last10 = trades.slice(-10);
+  const summary = last10.map(t =>
+    `#${t.id} ${t.setup ?? '?'} ${t.ticker ?? '?'}: outcome=${t.outcome ?? '?'} R=${t.rMultiple ?? '?'} nearLevel=${t.nearDailyLevel} CISD=${t.cisdConfirmed} projection=${t.projectionUsed} BE1:1=${t.beAt1r1}`
+  ).join('\n');
+
+  const prompt = `Review the last 10 trades and give a direct performance breakdown.
+
+Trades:
+${summary}
+
+Answer these 6 points:
+1. Which setup has best avg R?
+2. Which setup gets stopped most?
+3. How many stopped trades moved to TP after? (stop placement issue)
+4. CISD present on valid re-entries vs skipped?
+5. Projection targets: hit, overshot, or undershot?
+6. ONE specific thing to tighten.
+
+Then flag any of these if triggered:
+- SFP win rate < 40% → flag + ask if market conditions changed
+- Fractal alignment outperforming SFP → note shift
+- BE at 1:1 still happening → call it out
+- CISD being skipped on re-entries → flag each one
+- Projections consistently missing → adjust expectations
+
+Plain text, no markdown, be direct.`;
+
+  try {
+    const msg = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 450,
+      messages: [{ role: 'user', content: prompt }],
+    });
+    return msg.content[0].text.trim();
+  } catch (e) { return `Review error: ${e.message}`; }
+}
+
+async function logTrade(description) {
+  const parsed = await parseTrade(description);
+  let log = { trades: [] };
+  try { log = JSON.parse(readFileSync(TRADE_LOG, 'utf8')); } catch {}
+
+  const trade = { id: log.trades.length + 1, timestamp: new Date().toISOString(), raw: description, ...parsed };
+  log.trades.push(trade);
+  writeFileSync(TRADE_LOG, JSON.stringify(log, null, 2));
+
+  const count = log.trades.length;
+  let reply = `Trade #${count} logged.`;
+
+  // Inline flags
+  if (parsed.beAt1r1)
+    reply += ' BE at 1:1 flagged — use rejection zone trailing, not BE.';
+  if (parsed.outcome === 'SL' && parsed.notes?.toLowerCase().includes('tp after'))
+    reply += ' Stopped then hit TP — stop placement still the issue.';
+  if (parsed.setup === 'Post-Stop' && parsed.cisdConfirmed === false)
+    reply += ' CISD not confirmed on re-entry — that one should have been skipped.';
+
+  // 10-trade review
+  if (count % 10 === 0) {
+    reply += `\n\n10 trades in — running review...`;
+    const review = await runReview(log.trades);
+    reply += '\n\n' + review;
+  }
+
+  return reply;
+}
+
 // --- Command handler ---
 async function handleMessage(text) {
   const cmd = text.trim().toLowerCase();
@@ -161,6 +260,15 @@ async function handleMessage(text) {
     }
     await send(`Unknown ticker "${ticker}". Valid: ${TICKERS.join(', ')}`);
     return;
+  }
+
+  if (cmd.startsWith('log ')) {
+    const tradeText = text.trim().slice(4).trim();
+    if (tradeText) {
+      const result = await logTrade(tradeText);
+      await send(result);
+      return;
+    }
   }
 
   if (cmd === 'news' || cmd === 'news today') {

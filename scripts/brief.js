@@ -28,11 +28,16 @@ try { LEVELS = JSON.parse(readFileSync(join(__dirname, 'levels.json'), 'utf8'));
 let BTSTATS = {};
 try { BTSTATS = JSON.parse(readFileSync(join(__dirname, 'backtest-cache.json'), 'utf8')); } catch {}
 
-// Timeframes to analyse — order matters (top-down)
+// Load trade log for adjustment flags
+let TRADELOG = { trades: [] };
+try { TRADELOG = JSON.parse(readFileSync(join(__dirname, 'trade-log.json'), 'utf8')); } catch {}
+
+// Timeframes — top-down. 15M for TTrades fractal alignment, 5M is primary entry.
 const TIMEFRAMES = [
   { label: 'Daily', interval: '1d',  range: '2y',  resample: null },
-  { label: '4H',    interval: '60m', range: '90d', resample: 4    },  // resample 1H → 4H
+  { label: '4H',    interval: '60m', range: '90d', resample: 4    },
   { label: '1H',    interval: '60m', range: '30d', resample: null },
+  { label: '15M',   interval: '15m', range: '30d', resample: null },
   { label: '5M',    interval: '5m',  range: '30d', resample: null },
 ];
 
@@ -98,73 +103,101 @@ async function analyzeTF(yahooSymbol, tf) {
 
 const anthropic = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
 
-const ADVISORY_SYSTEM = `You are a StoicTA trading advisor for a micro futures day trader. StoicTA uses Fibonacci geometry, SBS (Structure Break + Sweep), and Daily Levels (PDH/PDL/PDC, HCOM/LCOM, PWH/PWL).
+const ADVISORY_SYSTEM = `You are a trading partner for a micro futures day trader. Two frameworks govern entries — they do not compete.
 
-Setup A: price breaks a key level, pulls back to retest it from the other side, enter on the 5M 20 SMA confluence. Target 2.618 fib extension.
-Setup B: price sweeps a key level (SFP wick), fails to close through it, reverses. Enter on the SFP candle close.
+STOICTA (fires near daily levels only):
+- Setup 1 SFP: price sweeps a daily level (fakeout beyond swing high/low), candle closes back inside. Enter on close of that candle. Stop beyond SFP wick. Reversal.
+- Setup 2 B&R: price breaks a level with conviction, pulls back to retest, level holds. Enter on hold confirmation. Stop beyond structural swing of retest. Continuation.
+- RULE: if price is NOT near a significant daily level, StoicTA does NOT apply.
 
-Write 2-3 sentences of specific, actionable advisory. Rules:
-- Reference actual price numbers from the data
-- Name the specific setup (A or B), the specific level to watch, and why
-- If there is a news event within 60 minutes, warn to sit out or reduce size
-- If timeframes conflict badly, say so directly and tell them to wait
-- Never write vague statements like "watch for opportunities" or "the market is mixed"
-- Be direct. No fluff.
-- Plain text only — no markdown, no bold, no asterisks.`;
+TTRADES FRACTAL MODEL (fires away from daily levels):
+- Setup 3 Fractal: Daily bias (higher lows = bullish / lower highs = bearish) → 4H swing structure confirms → 15M entry on continuation candle. All three must align. Stop beyond protected swing on 15M. 5M is primary entry timeframe.
+- Setup 4 Post-Stop Re-entry: after a stop — wait for (1) higher TF candle 2 or 3 closure AND (2) CISD on lower TF — price closes through candles that created the swing, V-shaped, decisive, 1-3 candles. Sideways grind through structure = not CISD. Lower TF CISD without higher TF closure = ignore entirely.
+
+CONTINUATION QUALITY FILTER (check before any continuation):
+1. Real continuation or consolidation? V-shaped, closes through opposing candles decisively = valid. Slow grind / sideways = skip.
+2. Liquidity sweep? If price is sweeping short-term highs/lows — wait one more candle. Sweep completion is not an entry.
+3. Higher TF target already met? If price already reached major objective = do not chase. Wait for next setup.
+
+STOP RULES:
+- Structural always — beyond protected swing or SFP wick. Never fixed pip.
+- Do NOT move to BE at 1:1. Trail to below most recent rejection zone once 1.5R cleared.
+- Price commonly rejects 20-40% into the swing before continuing — real stop sits below that rejection zone.
+
+Answer in this exact order. Be SHORT. Plain text only, no markdown. Talk like a trading partner — tell what the rules say, not what you predict:
+1. Near a daily level? If yes — which level and is there an SFP or B&R forming?
+2. If no level nearby — is Daily/4H/15M fractal aligned? What direction?
+3. Bias: bullish/bearish/neutral + one plain English reason from the rules.
+4. Continuation check: real continuation or consolidation? Sweep happening? Higher TF target already met?
+5. What invalidates this setup.`;
 
 async function advisory(results, key, newsEvents = []) {
-  const fmt   = n => n?.toLocaleString('en-US', { maximumFractionDigits: 2 }) ?? '—';
-  const daily = results[0];
-  const tf4h  = results[1];
-  const tf1h  = results[2];
-  const tf5m  = results[3];
-  const lvl   = LEVELS[key] || {};
-  const bt    = BTSTATS[key] || {};
-  const price = tf5m.price;
+  const fmt    = n => n?.toLocaleString('en-US', { maximumFractionDigits: 2 }) ?? '—';
+  const daily  = results[0];
+  const tf4h   = results[1];
+  const tf1h   = results[2];
+  const tf15m  = results[3];
+  const tf5m   = results[4];
+  const lvl    = LEVELS[key] || {};
+  const bt     = BTSTATS[key] || {};
+  const price  = tf5m.price;
 
   const now = new Date();
   const etTime = now.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false });
   const etHour = parseInt(now.toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }));
   const session = etHour < 9 ? 'pre-market' : etHour < 12 ? 'NY morning' : etHour < 16 ? 'NY afternoon' : 'after-hours';
 
+  // Near-level detection (within 0.3%)
+  const nearLevels = Object.entries(lvl)
+    .filter(([, val]) => val && Math.abs(price - val) / val < 0.003)
+    .map(([name, val]) => `${name} (${fmt(val)})`);
+
+  // Adjustment flags from trade log
+  const recent10 = TRADELOG.trades.slice(-10);
+  const beCount = recent10.filter(t => t.beAt1r1).length;
+  const flagStr = beCount > 0
+    ? `\nADJUSTMENT FLAG: BE at 1:1 used in ${beCount} of last 10 trades — remind to use rejection zone trailing.`
+    : '';
+
   const newsStr = newsEvents.length
     ? newsEvents.map(e => `  ${e.time} ET — ${e.title}${e.forecast ? ` (Forecast: ${e.forecast})` : ''}`).join('\n')
     : '  None today';
 
   const prompt = `Ticker: ${key} | Price: ${fmt(price)} | Session: ${etTime} ET (${session})
+Near daily levels: ${nearLevels.length ? nearLevels.join(', ') : 'NONE'}
 
 Timeframe bias:
   Daily: ${daily.bias.label} (SMA20: ${fmt(daily.sma20)}, SMA200: ${fmt(daily.sma200)})
   4H:    ${tf4h.bias.label}  (SMA20: ${fmt(tf4h.sma20)}, SMA200: ${fmt(tf4h.sma200)})
   1H:    ${tf1h.bias.label}  (SMA20: ${fmt(tf1h.sma20)}, SMA200: ${fmt(tf1h.sma200)})
-  5M:    ${tf5m.bias.label}  (SMA20: ${fmt(tf5m.sma20)}, SMA200: ${fmt(tf5m.sma200)})
+  15M:   ${tf15m.bias.label} (SMA20: ${fmt(tf15m.sma20)}, SMA200: ${fmt(tf15m.sma200)}) ← TTrades fractal layer
+  5M:    ${tf5m.bias.label}  (SMA20: ${fmt(tf5m.sma20)}, SMA200: ${fmt(tf5m.sma200)}) ← primary entry
 
-Stoic Edge levels:
+All daily levels:
   PDH: ${fmt(lvl.PDH)}  PDC: ${fmt(lvl.PDC)}  PDL: ${fmt(lvl.PDL)}
   HCOM: ${fmt(lvl.HCOM)}  LCOM: ${fmt(lvl.LCOM)}
   PWH: ${fmt(lvl.PWH)}  PWL: ${fmt(lvl.PWL)}
 
-Backtest (60d): Setup A ${bt.setupA?.winRate ?? '?'}% win rate | Setup B ${bt.setupB?.winRate ?? '?'}% win rate
+Backtest win rates: B&R ${bt.setupA?.winRate ?? '?'}% | SFP ${bt.setupB?.winRate ?? '?'}%
 
 High-impact news today:
-${newsStr}
+${newsStr}${flagStr}
 
-Write the advisory now.`;
+Give the brief now.`;
 
   try {
     const msg = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 300,
+      max_tokens: 350,
       system: ADVISORY_SYSTEM,
       messages: [{ role: 'user', content: prompt }],
     });
     return msg.content[0].text.trim();
   } catch {
-    // Fallback to score-based canned text if API fails
     const totalScore = results.reduce((s, r) => s + r.bias.score, 0);
-    if (totalScore >= 4)  return `Full bull alignment. Setup A: retest of 5M 20 SMA (${fmt(tf5m.sma20)}) or PDC (${fmt(lvl.PDC)}) from above.`;
-    if (totalScore <= -4) return `Full bear alignment. Setup A: rejection at 5M 20 SMA (${fmt(tf5m.sma20)}) or PDC (${fmt(lvl.PDC)}) from below.`;
-    return `Timeframes mixed — no clear edge. Wait for daily and 4H to agree.`;
+    if (totalScore >= 5)  return `Full bull alignment. B&R setup: retest of 5M SMA20 (${fmt(tf5m.sma20)}) or PDC (${fmt(lvl.PDC)}) from above.`;
+    if (totalScore <= -5) return `Full bear alignment. B&R setup: rejection at 5M SMA20 (${fmt(tf5m.sma20)}) or PDC (${fmt(lvl.PDC)}) from below.`;
+    return `Timeframes mixed — no clear edge. Wait for Daily and 4H to agree.`;
   }
 }
 
@@ -198,7 +231,7 @@ async function analyzeTicker(key, newsEvents = []) {
 
     const section = [
       `━━━━━━━━━━━━━━━━━━━━━━`,
-      `${sym.label} — ${fmt(results[3].price)}`,
+      `${sym.label} — ${fmt(results[4].price)}`,
       ``,
       ...results.map(r => r.line),
       ...lvlLines,
@@ -209,7 +242,7 @@ async function analyzeTicker(key, newsEvents = []) {
 
     const data = {
       key,
-      price: results[3].price,
+      price: results[4].price,
       timeframes: results.map(r => ({ label: r.label, bias: r.bias.label, sma20: r.sma20, sma200: r.sma200 })),
       levels: lvl || {},
       advisory: adv,
