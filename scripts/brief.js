@@ -32,6 +32,10 @@ try { BTSTATS = JSON.parse(readFileSync(join(__dirname, 'backtest-cache.json'), 
 let TRADELOG = { trades: [] };
 try { TRADELOG = JSON.parse(readFileSync(join(__dirname, 'trade-log.json'), 'utf8')); } catch {}
 
+// Load Fractal Model cache (written during Load up strat sessions)
+let FRACTAL = {};
+try { FRACTAL = JSON.parse(readFileSync(join(__dirname, 'fractal-cache.json'), 'utf8')); } catch {}
+
 // Timeframes — top-down. 15M for TTrades fractal alignment, 5M is primary entry.
 const TIMEFRAMES = [
   { label: 'Daily', interval: '1d',  range: '2y',  resample: null },
@@ -103,6 +107,38 @@ async function analyzeTF(yahooSymbol, tf) {
 
 const anthropic = new Anthropic({ apiKey: env.ANTHROPIC_API_KEY });
 
+function formatFractalContext(key, price) {
+  const fc = FRACTAL[key];
+  const fmt = n => n?.toLocaleString('en-US', { maximumFractionDigits: 2 }) ?? '—';
+  if (!fc) return '  No fractal cache — refresh via Load up strat with TV open.';
+
+  const ageH = FRACTAL.updated
+    ? Math.round((Date.now() - new Date(FRACTAL.updated).getTime()) / 3600000)
+    : null;
+  const ageNote = ageH !== null && ageH > 4 ? ` (data ${ageH}h old)` : '';
+
+  const lines = [`Bias: ${fc.bias}${ageNote} | ${fc.model} | SMT: ${fc.smt?.join(', ') ?? '—'}`];
+
+  // Active fib sets — show targets still ahead of price
+  for (const set of (fc.activeFibSets || []).slice(0, 2)) {
+    const targets = ['-1', '-2', '-2.5', '-4', '-4.5']
+      .map(k => set[k]).filter(v => v != null)
+      .filter(v => set.direction === 'bearish' ? v < price : v > price);
+    const label = `${set.direction.toUpperCase()} set (C2: ${fmt(set.c2)}, 0: ${fmt(set['0'])})`;
+    lines.push(`  ${label} → targets: ${targets.length ? targets.slice(0, 3).map(fmt).join(', ') : 'all hit / N/A'}`);
+  }
+
+  // 4 nearest imbalance zones (2 above, 2 below)
+  const zones = fc.imbalanceZones || [];
+  const above = zones.filter(z => z.low >= price).sort((a, b) => a.low - b.low).slice(0, 2);
+  const below = zones.filter(z => z.high <= price).sort((a, b) => b.high - a.high).slice(0, 2);
+  const allZones = [...below.reverse(), ...above]
+    .map(z => `${fmt(z.low)}-${fmt(z.high)}`);
+  if (allZones.length) lines.push(`  Imbalance zones near price: ${allZones.join(' | ')}`);
+
+  return lines.join('\n');
+}
+
 const ADVISORY_SYSTEM = `You are a trading partner for a micro futures day trader. Two frameworks govern entries — they do not compete.
 
 STOICTA (fires near daily levels only):
@@ -111,7 +147,7 @@ STOICTA (fires near daily levels only):
 - RULE: if price is NOT near a significant daily level, StoicTA does NOT apply.
 
 TTRADES FRACTAL MODEL (fires away from daily levels):
-- Setup 3 Fractal: Daily bias (higher lows = bullish / lower highs = bearish) → 4H swing structure confirms → 15M entry on continuation candle. All three must align. Stop beyond protected swing on 15M. 5M is primary entry timeframe.
+- Setup 3 Fractal: The Fractal Model indicator bias is the authoritative TTrades directional read — trust it over SMA approximations. Daily/4H/15M SMA bias confirms the structure context. 5M is primary entry timeframe. Stop beyond protected swing on 15M.
 - Setup 4 Post-Stop Re-entry: after a stop — wait for (1) higher TF candle 2 or 3 closure AND (2) CISD on lower TF — price closes through candles that created the swing, V-shaped, decisive, 1-3 candles. Sideways grind through structure = not CISD. Lower TF CISD without higher TF closure = ignore entirely.
 
 PRICE TARGETS (updated May 2026):
@@ -169,10 +205,15 @@ async function advisory(results, key, newsEvents = []) {
     ? newsEvents.map(e => `  ${e.time} ET — ${e.title}${e.forecast ? ` (Forecast: ${e.forecast})` : ''}`).join('\n')
     : '  None today';
 
+  const fractalCtx = formatFractalContext(key, price);
+
   const prompt = `Ticker: ${key} | Price: ${fmt(price)} | Session: ${etTime} ET (${session})
 Near daily levels: ${nearLevels.length ? nearLevels.join(', ') : 'NONE'}
 
-Timeframe bias:
+Fractal Model indicator (TTrades — authoritative for Setup 3/4):
+${fractalCtx}
+
+Timeframe bias (SMA-based context):
   Daily: ${daily.bias.label} (SMA20: ${fmt(daily.sma20)}, SMA200: ${fmt(daily.sma200)})
   4H:    ${tf4h.bias.label}  (SMA20: ${fmt(tf4h.sma20)}, SMA200: ${fmt(tf4h.sma200)})
   1H:    ${tf1h.bias.label}  (SMA20: ${fmt(tf1h.sma20)}, SMA200: ${fmt(tf1h.sma200)})
