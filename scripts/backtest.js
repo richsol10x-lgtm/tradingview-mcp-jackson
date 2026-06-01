@@ -19,8 +19,8 @@ const SYMBOLS = {
 };
 
 const MAX_RETEST    = 24;
-const MAX_HOLD      = 100;
-const MAX_HOLD_15M  = 60;     // 60 × 15min = 15h max hold for Setup D
+const MAX_HOLD      = 100;    // bars (5M) — 8.3h max hold
+const MAX_HOLD_1M   = 500;    // bars (1M) — 8.3h max hold
 const MIN_WICK      = 0.0015;
 const MIN_BREAK     = 0.001;
 const RETEST_WINDOW = 0.002;
@@ -68,43 +68,29 @@ function buildDailyLevels(dailyBars) {
   return map;
 }
 
-// Group 1H bars into 4H bars (every 4 consecutive)
-function aggregateTo4H(bars1H) {
-  const result = [];
-  for (let i = 0; i + 3 < bars1H.length; i += 4) {
-    const s = bars1H.slice(i, i + 4);
-    result.push({
-      t: s[0].t,
-      o: s[0].o,
-      h: Math.max(...s.map(b => b.h)),
-      l: Math.min(...s.map(b => b.l)),
-      c: s[3].c,
-    });
-  }
-  return result;
-}
-
-// Build C2 bias for each complete 4H bar
-function build4HBiases(bars4H) {
-  const result = [];
-  for (let i = 1; i < bars4H.length; i++) {
-    const curr = bars4H[i];
-    const prev = bars4H[i - 1];
+// Pre-compute 15M C2/C3 signals: each bar that closes as C2 or C3 emits a bias signal.
+// C2 bullish: bar sweeps prev low, closes back above.
+// C2 bearish: bar sweeps prev high, closes back below.
+// C3 bullish: prev was a failed bullish C2 (swept below, didn't close back) → current closes above prev.open.
+// C3 bearish: mirror.
+function build15mSignals(bars15m) {
+  const signals = [];
+  for (let i = 2; i < bars15m.length; i++) {
+    const bar  = bars15m[i];
+    const prev = bars15m[i - 1];
     let bias   = null;
-    if (curr.h > prev.h && curr.c < prev.h) bias = 'BEARISH';
-    else if (curr.l < prev.l && curr.c > prev.l) bias = 'BULLISH';
-    result.push({ endTime: curr.t + 4 * 3600, bias });
+    // C2
+    if      (bar.l < prev.l && bar.c > prev.l) bias = 'BULLISH';
+    else if (bar.h > prev.h && bar.c < prev.h) bias = 'BEARISH';
+    // C3 (prev was a failed C2 attempt)
+    else if (i >= 3) {
+      const prev2 = bars15m[i - 2];
+      if      (prev.l < prev2.l && prev.c <= prev2.l && bar.c > prev.o) bias = 'BULLISH';
+      else if (prev.h > prev2.h && prev.c >= prev2.h && bar.c < prev.o) bias = 'BEARISH';
+    }
+    if (bias) signals.push({ closeTime: bar.t + 900, bias });
   }
-  return result;
-}
-
-function getCurrent4HBias(biases4H, ts) {
-  let latest = null;
-  for (const b of biases4H) {
-    if (b.endTime <= ts) latest = b.bias;
-    else break;
-  }
-  return latest;
+  return signals;
 }
 
 function stats(trades) {
@@ -368,68 +354,50 @@ function findCISD(bars, idx, direction) {
   }
 }
 
-// Setup D — TTrades CISD on 15M, intraday daily C2 bias + 4H agreement required.
-// Daily C2 is detected intraday: today's running H/L sweeps prev day's PDH/PDL and
-// the current bar closes back inside → same logic as watching the daily bar form live.
-function runSetupD(bars15m, biases4H, levels, rMultiplier = 2) {
+// Setup D — TTrades CISD.
+// Bias: 15M C2/C3 signal (build15mSignals). Entry: CISD on cisdBars (1M or 5M).
+// Signal stays valid for up to 1 hour (4 × 15M bars) after the C2/C3 close.
+// One trade per day per direction per timeframe.
+function runSetupD(cisdBars, signals15m, rMultiplier = 2, maxHoldBars = MAX_HOLD) {
   const trades   = [];
   const usedDays = new Set();
-  const dayRunH  = {}; // date → running session high
-  const dayRunL  = {}; // date → running session low
+  let   sigPtr   = 0;
 
-  for (let i = 3; i < bars15m.length - MAX_HOLD_15M; i++) {
-    const bar   = bars15m[i];
-    const today = dateStr(bar.t);
+  for (let i = 2; i < cisdBars.length - maxHoldBars; i++) {
+    const bar = cisdBars[i];
     if (!isNYSession(bar.t)) continue;
 
-    const lvl = levels[today]; // prev day's PDH/PDL
-    if (!lvl) continue;
+    // Advance two-pointer to most recent 15M signal that has closed
+    while (sigPtr + 1 < signals15m.length && signals15m[sigPtr + 1].closeTime <= bar.t) sigPtr++;
 
-    // Update running session OHLCV (NY session only)
-    dayRunH[today] = Math.max(dayRunH[today] ?? bar.h, bar.h);
-    dayRunL[today] = Math.min(dayRunL[today] ?? bar.l, bar.l);
+    const sig = signals15m[sigPtr];
+    if (!sig || sig.closeTime > bar.t || bar.t - sig.closeTime > 3600) continue;
 
-    // Intraday C2: session has swept PDH/PDL and current bar closes back inside
-    let dBias = null;
-    if (dayRunH[today] > lvl.PDH && bar.c < lvl.PDH) dBias = 'BEARISH';
-    else if (dayRunL[today] < lvl.PDL && bar.c > lvl.PDL) dBias = 'BULLISH';
-    if (!dBias) continue;
-
-    // 4H must agree
-    const h4Bias = getCurrent4HBias(biases4H, bar.t);
-    if (!h4Bias || h4Bias !== dBias) continue;
-
-    // 15M CISD entry
-    const cisd = findCISD(bars15m, i, dBias);
+    const dBias = sig.bias;
+    const cisd  = findCISD(cisdBars, i, dBias);
     if (!cisd) continue;
 
-    const dayKey = `${today}-D-${dBias}`;
+    const dayKey = `${dateStr(bar.t)}-D-${dBias}`;
     if (usedDays.has(dayKey)) continue;
     usedDays.add(dayKey);
 
     const entry = bar.c;
     let stop, rDist;
-    if (dBias === 'BULLISH') {
-      stop  = cisd.seriesLow;
-      rDist = entry - stop;
-    } else {
-      stop  = cisd.seriesHigh;
-      rDist = stop - entry;
-    }
+    if (dBias === 'BULLISH') { stop = cisd.seriesLow;  rDist = entry - stop; }
+    else                      { stop = cisd.seriesHigh; rDist = stop - entry; }
     if (rDist <= 0) continue;
 
     const target = dBias === 'BULLISH' ? entry + rMultiplier * rDist : entry - rMultiplier * rDist;
     const dir    = dBias === 'BULLISH' ? 'LONG' : 'SHORT';
-    const out    = checkOutcome(bars15m, i + 1, entry, stop, target, MAX_HOLD_15M);
+    const out    = checkOutcome(cisdBars, i + 1, entry, stop, target, maxHoldBars);
     if (out.result !== 'EXPIRED')
-      trades.push({ dir, entry, stop, target, ...out, date: today });
+      trades.push({ dir, entry, stop, target, ...out, date: dateStr(bar.t) });
   }
   return trades;
 }
 
 function formatReport(results) {
   const m5  = b => b * 5;
-  const m15 = b => b * 15;
   const pct = n => String(n + '%').padEnd(5);
 
   const rowAB = (label, s2, s3) => s2.count
@@ -450,15 +418,28 @@ function formatReport(results) {
     return lines.join('\n');
   };
 
-  const rowD = (s2, s3) => s2.count
-    ? `Setup D — TTrades CISD (${s2.count} trades)\n` +
-      `  2R: ${pct(s2.winRate)}  ~${m15(s2.avgWinBars)}min to target\n` +
-      `  3R: ${pct(s3.winRate)}  ~${m15(s3.avgWinBars)}min to target`
-    : `Setup D — TTrades CISD: no setups found`;
+  const rowD = (d5s2, d5s3, d1s2, d1s3) => {
+    const lines = [];
+    if (d5s2.count)
+      lines.push(
+        `Setup D — TTrades CISD · 5M entry (${d5s2.count} trades, 60d)`,
+        `  2R: ${pct(d5s2.winRate)}  ~${m5(d5s2.avgWinBars)}min to target`,
+        `  3R: ${pct(d5s3.winRate)}  ~${m5(d5s3.avgWinBars)}min to target`,
+      );
+    else lines.push(`Setup D — TTrades CISD · 5M entry: no setups found`);
+    if (d1s2.count)
+      lines.push(
+        `Setup D — TTrades CISD · 1M entry (${d1s2.count} trades, 7d)`,
+        `  2R: ${pct(d1s2.winRate)}  ~${d1s2.avgWinBars}min to target`,
+        `  3R: ${pct(d1s3.winRate)}  ~${d1s3.avgWinBars}min to target`,
+      );
+    else lines.push(`Setup D — TTrades CISD · 1M entry: no setups found (7d sample)`);
+    return lines.join('\n');
+  };
 
-  const sections = results.map(({ key, setupA, setupB, setupC, setupD }) => [
+  const sections = results.map(({ key, setupA, setupB, setupC, setupD5, setupD1 }) => [
     `━━━━━━━━━━━━━━━━━━━━━━`,
-    `${key} — 60-Day Backtest`,
+    `${key} — Backtest`,
     ``,
     rowAB(`Setup A — B&R`, setupA['2R'], setupA['3R']),
     ``,
@@ -466,13 +447,13 @@ function formatReport(results) {
     ``,
     rowC(setupC['2R'], setupC['3R']),
     ``,
-    rowD(setupD['2R'], setupD['3R']),
+    rowD(setupD5['2R'], setupD5['3R'], setupD1['2R'], setupD1['3R']),
   ].join('\n'));
 
   return [
     `📊 STOIC EDGE — FULL BACKTEST`,
-    `A+B: StoicTA PDH/PDL  |  C: SBS fractal (5M)  |  D: TTrades CISD (15M)`,
-    `60-day  |  NY session only  |  Structural stops`,
+    `A+B: StoicTA PDH/PDL  |  C: SBS (5M)  |  D: TTrades 15M C2/C3 → 5M+1M CISD`,
+    `A/B/C/D5: 60-day  |  D1: 7-day  |  NY session  |  Structural stops`,
     ``,
     ...sections,
     ``,
@@ -483,16 +464,15 @@ function formatReport(results) {
 
 async function analyzeTicker(key) {
   const sym = SYMBOLS[key];
-  const [bars5m, barsDaily, bars1H, bars15m] = await Promise.all([
+  const [bars5m, barsDaily, bars15m, bars1m] = await Promise.all([
     fetchOHLCV(sym, '5m',  '60d'),
     fetchOHLCV(sym, '1d',  '6mo'),
-    fetchOHLCV(sym, '1h',  '60d'),
     fetchOHLCV(sym, '15m', '60d'),
+    fetchOHLCV(sym, '1m',  '7d'),
   ]);
 
   const levels   = buildDailyLevels(barsDaily);
-  const bars4H   = aggregateTo4H(bars1H);
-  const biases4H = build4HBiases(bars4H);
+  const sigs15m  = build15mSignals(bars15m);
 
   const tradesC2R = runSetupC(bars5m, 2);
   const tradesC3R = runSetupC(bars5m, 3);
@@ -504,13 +484,11 @@ async function analyzeTicker(key) {
 
   return {
     key,
-    setupA: { '2R': stats(runSetupA(bars5m, levels, 2)), '3R': stats(runSetupA(bars5m, levels, 3)) },
-    setupB: { '2R': stats(runSetupB(bars5m, levels, 2)), '3R': stats(runSetupB(bars5m, levels, 3)) },
-    setupC: { '2R': mkC(tradesC2R), '3R': mkC(tradesC3R) },
-    setupD: {
-      '2R': stats(runSetupD(bars15m, biases4H, levels, 2)),
-      '3R': stats(runSetupD(bars15m, biases4H, levels, 3)),
-    },
+    setupA:  { '2R': stats(runSetupA(bars5m, levels, 2)), '3R': stats(runSetupA(bars5m, levels, 3)) },
+    setupB:  { '2R': stats(runSetupB(bars5m, levels, 2)), '3R': stats(runSetupB(bars5m, levels, 3)) },
+    setupC:  { '2R': mkC(tradesC2R), '3R': mkC(tradesC3R) },
+    setupD5: { '2R': stats(runSetupD(bars5m,  sigs15m, 2, MAX_HOLD)),   '3R': stats(runSetupD(bars5m,  sigs15m, 3, MAX_HOLD)) },
+    setupD1: { '2R': stats(runSetupD(bars1m,  sigs15m, 2, MAX_HOLD_1M)),'3R': stats(runSetupD(bars1m,  sigs15m, 3, MAX_HOLD_1M)) },
   };
 }
 
@@ -528,17 +506,18 @@ async function main() {
       const emptyC = { ...empty, m1: empty, m2: empty };
       return {
         key, error: e.message,
-        setupA: { '2R': empty, '3R': empty },
-        setupB: { '2R': empty, '3R': empty },
-        setupC: { '2R': emptyC, '3R': emptyC },
-        setupD: { '2R': empty, '3R': empty },
+        setupA:  { '2R': empty,  '3R': empty },
+        setupB:  { '2R': empty,  '3R': empty },
+        setupC:  { '2R': emptyC, '3R': emptyC },
+        setupD5: { '2R': empty,  '3R': empty },
+        setupD1: { '2R': empty,  '3R': empty },
       };
     }
   }));
 
   const cache = { updated: new Date().toISOString(), period: '60d' };
   for (const r of results)
-    cache[r.key] = { setupA: r.setupA, setupB: r.setupB, setupC: r.setupC, setupD: r.setupD };
+    cache[r.key] = { setupA: r.setupA, setupB: r.setupB, setupC: r.setupC, setupD5: r.setupD5, setupD1: r.setupD1 };
   writeFileSync(join(__dirname, 'backtest-cache.json'), JSON.stringify(cache, null, 2));
   console.log('Cache saved → scripts/backtest-cache.json');
 

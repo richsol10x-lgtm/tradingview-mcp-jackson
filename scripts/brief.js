@@ -219,13 +219,15 @@ async function advisory(results, key, newsEvents = []) {
   const ev = (wr, r) => wr != null ? ((wr / 100 * r) - (1 - wr / 100)).toFixed(2) : '?';
   const sA2 = bt.setupA?.['2R'], sA3 = bt.setupA?.['3R'];
   const sB2 = bt.setupB?.['2R'], sB3 = bt.setupB?.['3R'];
-  const sC2 = bt.setupC?.['2R'], sC3 = bt.setupC?.['3R'];
-  const sD2 = bt.setupD?.['2R'], sD3 = bt.setupD?.['3R'];
+  const sC2  = bt.setupC?.['2R'],  sC3  = bt.setupC?.['3R'];
+  const sD52 = bt.setupD5?.['2R'], sD53 = bt.setupD5?.['3R'];
+  const sD12 = bt.setupD1?.['2R'], sD13 = bt.setupD1?.['3R'];
   const btRows = [];
-  if (sA3) btRows.push(`B&R: 2R=${sA2.winRate}% (EV ${ev(sA2.winRate,2)}R) | 3R=${sA3.winRate}% (EV ${ev(sA3.winRate,3)}R) — ${sA3.count} trades`);
-  if (sB3) btRows.push(`SFP: 2R=${sB2.winRate}% (EV ${ev(sB2.winRate,2)}R) | 3R=${sB3.winRate}% (EV ${ev(sB3.winRate,3)}R) — ${sB3.count} trades`);
-  if (sC3) btRows.push(`SBS: 2R=${sC2.winRate}% | 3R=${sC3.winRate}% — ${sC3.count} trades (M1:${sC3.m1?.winRate??'?'}% M2:${sC3.m2?.winRate??'?'}%)`);
-  if (sD3) btRows.push(`CISD: 2R=${sD2.winRate}% | 3R=${sD3.winRate}% — ${sD3.count} trades`);
+  if (sA3)  btRows.push(`B&R: 2R=${sA2.winRate}% (EV ${ev(sA2.winRate,2)}R) | 3R=${sA3.winRate}% (EV ${ev(sA3.winRate,3)}R) — ${sA3.count} trades`);
+  if (sB3)  btRows.push(`SFP: 2R=${sB2.winRate}% (EV ${ev(sB2.winRate,2)}R) | 3R=${sB3.winRate}% (EV ${ev(sB3.winRate,3)}R) — ${sB3.count} trades`);
+  if (sC3)  btRows.push(`SBS: 2R=${sC2.winRate}% | 3R=${sC3.winRate}% — ${sC3.count} trades (M1:${sC3.m1?.winRate??'?'}% M2:${sC3.m2?.winRate??'?'}%)`);
+  if (sD53) btRows.push(`CISD-5M: 2R=${sD52.winRate}% | 3R=${sD53.winRate}% — ${sD53.count} trades (60d)`);
+  if (sD13) btRows.push(`CISD-1M: 2R=${sD12.winRate}% | 3R=${sD13.winRate}% — ${sD13.count} trades (7d)`);
   const btStr = btRows.length ? btRows.join('\n') : 'No backtest data';
 
   const prompt = `Ticker: ${key} | Price: ${fmt(price)} | Session: ${etTime} ET (${session})
@@ -289,15 +291,17 @@ async function analyzeTicker(key, newsEvents = []) {
     const btLines = bt?.setupA?.['3R']?.count ? (() => {
       const sA2 = bt.setupA['2R'], sA3 = bt.setupA['3R'];
       const sB2 = bt.setupB['2R'], sB3 = bt.setupB['3R'];
-      const sC2 = bt.setupC?.['2R'], sC3 = bt.setupC?.['3R'];
-      const sD2 = bt.setupD?.['2R'], sD3 = bt.setupD?.['3R'];
+      const sC2  = bt.setupC?.['2R'],  sC3  = bt.setupC?.['3R'];
+      const sD52 = bt.setupD5?.['2R'], sD53 = bt.setupD5?.['3R'];
+      const sD12 = bt.setupD1?.['2R'], sD13 = bt.setupD1?.['3R'];
       const rows = [
-        ``, `Stats (60d backtest):`,
-        `A (B&R): 2R=${sA2.winRate}%  3R=${sA3.winRate}% (${sA3.count} trades)`,
-        `B (SFP): 2R=${sB2.winRate}%  3R=${sB3.winRate}% (${sB3.count} trades)`,
+        ``, `Stats (backtest):`,
+        `A (B&R): 2R=${sA2.winRate}%  3R=${sA3.winRate}% (${sA3.count} trades, 60d)`,
+        `B (SFP): 2R=${sB2.winRate}%  3R=${sB3.winRate}% (${sB3.count} trades, 60d)`,
       ];
-      if (sC3?.count) rows.push(`C (SBS): 2R=${sC2.winRate}%  3R=${sC3.winRate}% (${sC3.count} trades | M1:${sC3.m1?.winRate??'?'}% M2:${sC3.m2?.winRate??'?'}%)`);
-      if (sD3?.count) rows.push(`D (CISD):2R=${sD2.winRate}%  3R=${sD3.winRate}% (${sD3.count} trades)`);
+      if (sC3?.count)  rows.push(`C (SBS):    2R=${sC2.winRate}%  3R=${sC3.winRate}% (${sC3.count} trades | M1:${sC3.m1?.winRate??'?'}% M2:${sC3.m2?.winRate??'?'}%)`);
+      if (sD53?.count) rows.push(`D 5M CISD:  2R=${sD52.winRate}%  3R=${sD53.winRate}% (${sD53.count} trades, 60d)`);
+      if (sD13?.count) rows.push(`D 1M CISD:  2R=${sD12.winRate}%  3R=${sD13.winRate}% (${sD13.count} trades, 7d)`);
       return rows;
     })() : [];
 
