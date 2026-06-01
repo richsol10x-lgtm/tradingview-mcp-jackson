@@ -1,65 +1,102 @@
 {
-  "watchlist": ["BTCUSDT"],
-  "default_timeframe": "1",
-
+  "watchlist": [
+    "CME_MINI:MNQ1!",
+    "CME_MINI:MES1!",
+    "COMEX_MINI:MGC1!",
+    "COMEX_MINI:SIL1!"
+  ],
+  "default_timeframe": "5",
   "strategy": {
-    "name": "10-Second Momentum Scalper",
-    "sources": [
-      "Price momentum — buy if last close > previous close (green candle)",
-      "RSI filter — only trade when RSI is not at an extreme (30–70 range)"
-    ],
-    "primary_timeframes": [
-      "1-minute (signal source)",
-      "10-second execution loop"
-    ]
+    "name": "StoicTA — Fib Geometry + SBS + Daily Levels",
+    "source": "youtuber-StoicTA",
+    "pine_script_path": null
   },
-
   "indicators": {
-    "rsi_14": "Momentum filter. Only trade when RSI is between 30–70 (avoid extremes).",
-    "price_momentum": "Compare last close vs previous close. Up = long signal. Down = short signal."
+    "20_sma": {
+      "name": "Simple Moving Average",
+      "length": 20,
+      "type": "SMA",
+      "purpose": "Short-term momentum and trend direction"
+    },
+    "200_sma": {
+      "name": "Simple Moving Average",
+      "length": 200,
+      "type": "SMA",
+      "purpose": "Primary trend bias — most important level on the chart"
+    },
+    "daily_levels": {
+      "type": "horizontal_lines",
+      "levels": ["PDH", "PDL", "PDC"],
+      "note": "Drawn manually each morning before the session. Not a TradingView indicator — does not count toward plan limit."
+    },
+    "fib_tools": {
+      "type": "drawing_tools",
+      "tools": ["Fib Retracement", "Trend-Based Fib Extension"],
+      "key_levels": ["0.5", "0.618", "1.0", "1.618", "2.0", "2.618", "4.23", "6.86"],
+      "note": "Anchor Trend-Based Fib Extension to first pullback. Do not move it unless a bigger sweep invalidates the first pullback."
+    }
   },
-
   "bias_criteria": {
     "bullish": [
-      "Last 1-min candle closed higher than the one before it",
-      "RSI is between 30 and 70"
+      "Price is consistently above both 20 SMA and 200 SMA",
+      "20 SMA is above 200 SMA",
+      "Price is holding above PDC or PDL after retesting it"
     ],
     "bearish": [
-      "Last 1-min candle closed lower than the one before it",
-      "RSI is between 30 and 70"
+      "Price is consistently below both 20 SMA and 200 SMA",
+      "20 SMA is below 200 SMA",
+      "Price is holding below PDC or PDH after retesting it"
     ],
     "neutral": [
-      "RSI is above 70 (overbought — skip)",
-      "RSI is below 30 (oversold — skip)",
-      "Candle close change is less than 0.05% (chop — skip)"
+      "Price is between the 20 SMA and 200 SMA — wait for clarity before trading",
+      "Price is chopping without a clean reaction at PDH, PDL, or PDC"
     ]
   },
-
   "entry_rules": {
+    "pre_session_prep": [
+      "Mark PDH (Previous Daily High) as a horizontal line",
+      "Mark PDL (Previous Daily Low) as a horizontal line",
+      "Mark PDC (Previous Daily Close) as a horizontal line",
+      "Check 20 SMA vs 200 SMA position to set bias for the session",
+      "Only take trades in the direction of the bias"
+    ],
     "long": [
-      "Last close > previous close by at least 0.05%",
-      "RSI between 30 and 70",
-      "Enter market buy immediately"
+      "Setup A — Break and Retest: Price breaks above PDH or PDC with conviction, pulls back to test that level from above, enter long on the retest with stop below the level",
+      "Setup B — Swing Failure Pattern (SFP): Price pokes below PDL or PDC but closes back above it — enter long on the reversal, stop below the wick low",
+      "Setup C — Fib Geometry (primary model): (1) Identify an impulsive move up. (2) Anchor Trend-Based Fib Extension to the first pullback — first pullback must retrace to at least 50%, ideally 61.8%. (3) Wait for price to extend to the 1.0 (100%) level — this confirms the expansion is real. (4) Enter a limit order long at 50% of the second pullback. Stop goes below the recent swing low. Target 2.618.",
+      "SBS overlay: Look for the 1-2-3-4-5 swing breakout sequence. Strongest long entry is at point 5 — the double bottom reversal after the sweep of point 2 stops. Set a buy stop just above the double bottom, stop below it."
     ],
     "short": [
-      "Last close < previous close by at least 0.05%",
-      "RSI between 30 and 70",
-      "Enter market sell immediately"
+      "Setup A — Break and Retest: Price breaks below PDL or PDC with conviction, retests that level from below, enter short on the retest with stop above the level",
+      "Setup B — Swing Failure Pattern (SFP): Price pokes above PDH or PDC but closes back below it — enter short on the reversal, stop above the wick high",
+      "Setup C — Fib Geometry (primary model): (1) Identify an impulsive move down. (2) Anchor Trend-Based Fib Extension to the first pullback — first pullback must retrace to at least 50%, ideally 61.8%. (3) Wait for price to extend to the 1.0 (100%) level. (4) Enter a limit order short at 50% of the second pullback. Stop goes above the recent swing high. Target 2.618.",
+      "SBS overlay: Same 1-2-3-4-5 in reverse. Best short entry at point 5 — double top reversal after sweep of point 2. Sell stop just below the double top."
+    ],
+    "session_timing": [
+      "Primary session: New York open (9:30 AM ET) — highest probability setups",
+      "Secondary session: London open (3:00 AM ET)",
+      "Do not trade away from PDH/PDL/PDC levels — only enter when price is at a level",
+      "Do not trade the first 15 minutes of NY open if price action is chaotic"
     ]
   },
-
   "exit_rules": [
-    "Exit automatically after 10 seconds (next loop tick closes previous position)",
-    "No manual exit management — pure time-based scalp"
+    "Primary target: 2.618 Trend-Based Fib Extension — take full profit or heavy partial here (~3–3.5R). This is the highest probability reversal or retracement level.",
+    "Runner target: 4.23 extension — move stop to break even after 2.618 is tagged, trail stop below structure to hold for this",
+    "Home run target: 6.86 extension — only hold for this on clear continuation setups, not retracements",
+    "For Break and Retest setups: target the next PDH, PDL, or PDC level on the other side",
+    "Alternative: hold into session close if clearly trending — trail stop above/below swing structure lows/highs",
+    "Minimum R:R on every trade is 2:1 — skip the setup entirely if the levels do not allow it",
+    "After 2.618 is hit, move stop to break even on any runner — do not give back the profit"
   ],
-
   "risk_rules": [
-    "Fixed trade size: 1% of portfolio per trade",
-    "Maximum trade size: $3.00",
-    "Maximum 6 trades per 60-second run",
-    "No stop loss — exit is time-based at next tick",
-    "For demo purposes only — minimum BitGet order size may apply"
+    "Maximum risk per trade: 1–2% of account",
+    "Maximum 3 trades per day — session ends after 3 trades regardless of outcome",
+    "3 losses in a single day = done immediately, close platform and walk away",
+    "Down 6% in a week = no trading until next Monday",
+    "Hard stop loss MUST be placed in the platform before the trade is entered — no exceptions",
+    "Stop loss is fixed at entry — never widen it to avoid a loss",
+    "Stop loss can only be moved closer to price (to lock in profit), never further away",
+    "Do not take any trade below 2:1 reward-to-risk"
   ],
-
-  "notes": "Demo strategy for YouTube video. Runs 6 trades over 60 seconds, one every 10 seconds. Signal is simple price momentum on 1-min candles with RSI sanity check."
+  "notes": "Strategy sourced from StoicTA (@StoicTA on YouTube, stoicedge.com). Only 2 indicators needed on-chart (20 SMA + 200 SMA) — fits any TradingView plan including free tier. PDH/PDL/PDC are drawn as horizontal lines (not indicators). Fib Retracement and Trend-Based Fib Extension are drawing tools (not indicators). Primary markets: MNQ, MES, Micro Gold, Micro Silver. Primary session: New York."
 }
