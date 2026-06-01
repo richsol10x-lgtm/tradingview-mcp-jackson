@@ -55,7 +55,7 @@ function strategy(b, price, sma20, sma200) {
 }
 
 async function fetchBars(yahooSymbol) {
-  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=5m&range=5d`;
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=5m&range=30d`;
   const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
   const json = await res.json();
   const result = json?.chart?.result?.[0];
