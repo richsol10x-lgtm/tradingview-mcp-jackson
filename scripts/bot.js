@@ -226,6 +226,22 @@ async function logTrade(description) {
 async function handleMessage(text) {
   const cmd = text.trim().toLowerCase();
 
+  if (cmd === 'help' || cmd === 'commands') {
+    await send(
+      `Commands:\n` +
+      `• brief all\n` +
+      `• brief MNQ / MES / MGC / SIL\n` +
+      `• backtest all\n` +
+      `• backtest MNQ / MES / MGC / SIL\n` +
+      `• news — today's high-impact events\n` +
+      `• news week — full week calendar\n` +
+      `• log [trade] — log a trade\n` +
+      `  e.g. log SFP MNQ PDH, hit TP 2.1R\n` +
+      `\nAnything else = Q&A against last brief`
+    );
+    return;
+  }
+
   if (cmd === 'brief all' || cmd === 'brief') {
     await send('Running full brief — one moment...');
     await runScript(BRIEF, null);
