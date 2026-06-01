@@ -225,7 +225,7 @@ All daily levels:
   HCOM: ${fmt(lvl.HCOM)}  LCOM: ${fmt(lvl.LCOM)}
   PWH: ${fmt(lvl.PWH)}  PWL: ${fmt(lvl.PWL)}
 
-Backtest win rates: B&R ${bt.setupA?.winRate ?? '?'}% | SFP ${bt.setupB?.winRate ?? '?'}%
+Backtest win rates (StoicTA @ 3R): B&R ${bt.setupA?.['3R']?.winRate ?? '?'}% | SFP ${bt.setupB?.['3R']?.winRate ?? '?'}%
 
 High-impact news today:
 ${newsStr}${flagStr}
@@ -264,16 +264,14 @@ async function analyzeTicker(key, newsEvents = []) {
     ] : [];
 
     const bt  = BTSTATS[key];
-    const btLines = bt?.setupA?.count ? (() => {
-      const sA = bt.setupA;
-      const sB = bt.setupB;
-      const aLine = sA.count
-        ? `A: ${sA.winRate}% (${sA.count} trades) ~${sA.avgWinBars*5}min to target`
-        : `A: no data`;
-      const bLine = sB.count
-        ? `B: ${sB.winRate}% (${sB.count} trades) ~${sB.avgWinBars*5}min to target`
-        : `B: no data`;
-      return [``, `Stats (60d backtest):`, aLine, bLine];
+    const btLines = bt?.setupA?.['3R']?.count ? (() => {
+      const sA2 = bt.setupA['2R'], sA3 = bt.setupA['3R'];
+      const sB2 = bt.setupB['2R'], sB3 = bt.setupB['3R'];
+      return [
+        ``, `Stats (60d backtest):`,
+        `A (B&R): 2R=${sA2.winRate}%  3R=${sA3.winRate}% (${sA3.count} trades)`,
+        `B (SFP): 2R=${sB2.winRate}%  3R=${sB3.winRate}% (${sB3.count} trades)`,
+      ];
     })() : [];
 
     const section = [

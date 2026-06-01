@@ -84,9 +84,9 @@ function checkOutcome(bars, fromIdx, entryPrice, stopPrice, targetPrice) {
   return { result: 'EXPIRED', bars: MAX_HOLD };
 }
 
-function runSetupA(bars, levels) {
+function runSetupA(bars, levels, rMultiplier = 2) {
   const trades   = [];
-  const usedDays = new Set(); // only first break per level per day
+  const usedDays = new Set();
 
   for (let i = 1; i < bars.length - MAX_HOLD; i++) {
     const bar  = bars[i];
@@ -98,14 +98,13 @@ function runSetupA(bars, levels) {
     const dayKeyL = `${dateStr(bar.t)}-PDH-LONG`;
     const dayKeyS = `${dateStr(bar.t)}-PDL-SHORT`;
 
-    // Setup A Long: first conviction close above PDH (at least 0.1% through)
     if (!usedDays.has(dayKeyL) && prev.c <= PDH && bar.c > PDH * (1 + MIN_BREAK)) {
       usedDays.add(dayKeyL);
       for (let j = i + 1; j < Math.min(i + MAX_RETEST, bars.length); j++) {
         if (bars[j].l <= PDH * 1.001 && bars[j].l >= PDH * 0.999) {
           const entry  = PDH;
           const stop   = PDH * (1 - STOP_PCT);
-          const target = PDH + 2 * (PDH - stop);
+          const target = PDH + rMultiplier * (PDH - stop);
           const out    = checkOutcome(bars, j + 1, entry, stop, target);
           if (out.result !== 'EXPIRED')
             trades.push({ dir: 'LONG', level: 'PDH', entry, stop, target, ...out, date: dateStr(bar.t) });
@@ -114,14 +113,13 @@ function runSetupA(bars, levels) {
       }
     }
 
-    // Setup A Short: first conviction close below PDL
     if (!usedDays.has(dayKeyS) && prev.c >= PDL && bar.c < PDL * (1 - MIN_BREAK)) {
       usedDays.add(dayKeyS);
       for (let j = i + 1; j < Math.min(i + MAX_RETEST, bars.length); j++) {
         if (bars[j].h >= PDL * 0.999 && bars[j].h <= PDL * 1.001) {
           const entry  = PDL;
           const stop   = PDL * (1 + STOP_PCT);
-          const target = PDL - 2 * (stop - PDL);
+          const target = PDL - rMultiplier * (stop - PDL);
           const out    = checkOutcome(bars, j + 1, entry, stop, target);
           if (out.result !== 'EXPIRED')
             trades.push({ dir: 'SHORT', level: 'PDL', entry, stop, target, ...out, date: dateStr(bar.t) });
@@ -133,9 +131,9 @@ function runSetupA(bars, levels) {
   return trades;
 }
 
-function runSetupB(bars, levels) {
+function runSetupB(bars, levels, rMultiplier = 2) {
   const trades   = [];
-  const usedDays = new Set(); // only first SFP per level per day
+  const usedDays = new Set();
 
   for (let i = 1; i < bars.length - MAX_HOLD; i++) {
     const bar = bars[i];
@@ -146,28 +144,26 @@ function runSetupB(bars, levels) {
     const dayKeyL = `${dateStr(bar.t)}-PDL-SFP`;
     const dayKeyS = `${dateStr(bar.t)}-PDH-SFP`;
 
-    // Setup B Long: wick extends at least MIN_WICK% below PDL, closes above PDL
     if (!usedDays.has(dayKeyL) && bar.l < PDL * (1 - MIN_WICK) && bar.c > PDL) {
       usedDays.add(dayKeyL);
       const entry  = bar.c;
       const stop   = bar.l;
       const rDist  = entry - stop;
       if (rDist > 0) {
-        const target = entry + 2 * rDist;
+        const target = entry + rMultiplier * rDist;
         const out    = checkOutcome(bars, i + 1, entry, stop, target);
         if (out.result !== 'EXPIRED')
           trades.push({ dir: 'LONG', level: 'PDL-SFP', entry, stop, target, ...out, date: dateStr(bar.t) });
       }
     }
 
-    // Setup B Short: wick extends at least MIN_WICK% above PDH, closes below PDH
     if (!usedDays.has(dayKeyS) && bar.h > PDH * (1 + MIN_WICK) && bar.c < PDH) {
       usedDays.add(dayKeyS);
       const entry  = bar.c;
       const stop   = bar.h;
       const rDist  = stop - entry;
       if (rDist > 0) {
-        const target = entry - 2 * rDist;
+        const target = entry - rMultiplier * rDist;
         const out    = checkOutcome(bars, i + 1, entry, stop, target);
         if (out.result !== 'EXPIRED')
           trades.push({ dir: 'SHORT', level: 'PDH-SFP', entry, stop, target, ...out, date: dateStr(bar.t) });
@@ -213,36 +209,38 @@ async function analyzeTicker(key) {
     fetchOHLCV(sym, '1d', '6mo'),
   ]);
   const levels = buildDailyLevels(barsDaily);
-  const setupA = runSetupA(bars5m, levels);
-  const setupB = runSetupB(bars5m, levels);
-  return { key, setupA: stats(setupA), setupB: stats(setupB) };
+  return {
+    key,
+    setupA: { '2R': stats(runSetupA(bars5m, levels, 2)), '3R': stats(runSetupA(bars5m, levels, 3)) },
+    setupB: { '2R': stats(runSetupB(bars5m, levels, 2)), '3R': stats(runSetupB(bars5m, levels, 3)) },
+  };
 }
 
 function formatReport(results) {
-  const avgMins = b => b * 5;
-  const sections = results.map(({ key, setupA: sA, setupB: sB }) => [
+  const m = b => b * 5;
+  const row = (label, s2, s3) => s2.count
+    ? `${label} (${s2.count} trades)\n` +
+      `  2R: ${String(s2.winRate + '%').padEnd(5)}  ~${m(s2.avgWinBars)}min to target\n` +
+      `  3R: ${String(s3.winRate + '%').padEnd(5)}  ~${m(s3.avgWinBars)}min to target ← your target`
+    : `${label}: no setups found`;
+
+  const sections = results.map(({ key, setupA, setupB }) => [
     `━━━━━━━━━━━━━━━━━━━━━━`,
-    `${key} — 60-Day Backtest (5M bars)`,
+    `${key} — 60-Day Backtest (StoicTA near PDH/PDL)`,
     ``,
-    `Setup A — Break & Retest (PDH/PDL)`,
-    sA.count
-      ? `  Trades: ${sA.count}  |  Win: ${sA.winRate}%  (${sA.wins}W/${sA.losses}L)\n  ~${avgMins(sA.avgWinBars)}min to target  |  ~${avgMins(sA.avgLossBars)}min to stop`
-      : `  No setups found`,
+    row(`Setup A — B&R`, setupA['2R'], setupA['3R']),
     ``,
-    `Setup B — SFP (PDH/PDL wick reversal)`,
-    sB.count
-      ? `  Trades: ${sB.count}  |  Win: ${sB.winRate}%  (${sB.wins}W/${sB.losses}L)\n  ~${avgMins(sB.avgWinBars)}min to target  |  ~${avgMins(sB.avgLossBars)}min to stop`
-      : `  No setups found`,
+    row(`Setup B — SFP`, setupB['2R'], setupB['3R']),
   ].join('\n'));
 
   return [
     `📊 STOIC TA — BACKTEST RESULTS`,
-    `Setup A + B  |  60-day  |  5M  |  2:1 R:R`,
+    `StoicTA Setups A+B  |  60-day  |  5M  |  2R vs 3R`,
+    `TTrades fractal entries: use 2R column for comparison`,
     ``,
     ...sections,
     ``,
     `━━━━━━━━━━━━━━━━━━━━━━`,
-    `Setup C excluded — requires human fib anchoring.`,
     `Mechanical approximation only — real execution will vary.`,
   ].join('\n');
 }
