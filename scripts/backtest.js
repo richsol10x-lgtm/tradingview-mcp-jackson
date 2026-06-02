@@ -94,10 +94,11 @@ function build15mSignals(bars15m) {
 }
 
 function stats(trades) {
-  if (!trades.length) return { count: 0, wins: 0, losses: 0, winRate: 0, avgWinBars: 0, avgLossBars: 0 };
-  const wins   = trades.filter(t => t.result === 'WIN');
-  const losses = trades.filter(t => t.result === 'LOSS');
-  const avg    = arr => arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : 0;
+  if (!trades.length) return { count: 0, wins: 0, losses: 0, winRate: 0, avgWinBars: 0, avgLossBars: 0, mfeLosses: 0, mfeLossPct: 0 };
+  const wins      = trades.filter(t => t.result === 'WIN');
+  const losses    = trades.filter(t => t.result === 'LOSS');
+  const mfeLosses = losses.filter(t => t.wentFavorable).length;
+  const avg       = arr => arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : 0;
   return {
     count:       trades.length,
     wins:        wins.length,
@@ -105,19 +106,25 @@ function stats(trades) {
     winRate:     Math.round((wins.length / trades.length) * 100),
     avgWinBars:  avg(wins.map(t => t.bars)),
     avgLossBars: avg(losses.map(t => t.bars)),
+    mfeLosses,
+    mfeLossPct:  losses.length ? Math.round((mfeLosses / losses.length) * 100) : 0,
   };
 }
 
 function checkOutcome(bars, fromIdx, entryPrice, stopPrice, targetPrice, maxHold = MAX_HOLD) {
+  const isLong = targetPrice > entryPrice;
+  let wentFavorable = false;
   for (let i = fromIdx; i < Math.min(fromIdx + maxHold, bars.length); i++) {
     const { h, l } = bars[i];
-    const hitTarget = targetPrice > entryPrice ? h >= targetPrice : l <= targetPrice;
-    const hitStop   = stopPrice  < entryPrice  ? l <= stopPrice   : h >= stopPrice;
-    if (hitTarget && hitStop) return { result: 'WIN', bars: i - fromIdx };
-    if (hitTarget) return { result: 'WIN',  bars: i - fromIdx };
-    if (hitStop)   return { result: 'LOSS', bars: i - fromIdx };
+    if (isLong  && h > entryPrice) wentFavorable = true;
+    if (!isLong && l < entryPrice) wentFavorable = true;
+    const hitTarget = isLong             ? h >= targetPrice : l <= targetPrice;
+    const hitStop   = stopPrice < entryPrice ? l <= stopPrice : h >= stopPrice;
+    if (hitTarget && hitStop) return { result: 'WIN',  bars: i - fromIdx, wentFavorable };
+    if (hitTarget) return { result: 'WIN',  bars: i - fromIdx, wentFavorable };
+    if (hitStop)   return { result: 'LOSS', bars: i - fromIdx, wentFavorable };
   }
-  return { result: 'EXPIRED', bars: maxHold };
+  return { result: 'EXPIRED', bars: maxHold, wentFavorable };
 }
 
 function runSetupA(bars, levels, rMultiplier = 2) {
@@ -400,10 +407,13 @@ function formatReport(results) {
   const m5  = b => b * 5;
   const pct = n => String(n + '%').padEnd(5);
 
+  const mfeStr = s => s.losses ? `  Losses that went green first: ${s.mfeLosses}/${s.losses} (${s.mfeLossPct}%)` : '';
+
   const rowAB = (label, s2, s3) => s2.count
     ? `${label} (${s2.count} trades)\n` +
       `  2R: ${pct(s2.winRate)}  ~${m5(s2.avgWinBars)}min to target\n` +
-      `  3R: ${pct(s3.winRate)}  ~${m5(s3.avgWinBars)}min to target`
+      `  3R: ${pct(s3.winRate)}  ~${m5(s3.avgWinBars)}min to target\n` +
+      mfeStr(s2)
     : `${label}: no setups found`;
 
   const rowC = (s2, s3) => {
@@ -412,9 +422,10 @@ function formatReport(results) {
       `Setup C — SBS (${s2.count} trades)`,
       `  2R: ${pct(s2.winRate)}  ~${m5(s2.avgWinBars)}min to target`,
       `  3R: ${pct(s3.winRate)}  ~${m5(s3.avgWinBars)}min to target`,
+      mfeStr(s2),
     ];
-    if (s2.m1.count) lines.push(`  M1 (shallow): ${s2.m1.count} trades | ${s2.m1.winRate}% win`);
-    if (s2.m2.count) lines.push(`  M2 (deep):    ${s2.m2.count} trades | ${s2.m2.winRate}% win`);
+    if (s2.m1.count) lines.push(`  M1 (shallow): ${s2.m1.count} trades | ${s2.m1.winRate}% win | green first: ${s2.m1.mfeLossPct}%`);
+    if (s2.m2.count) lines.push(`  M2 (deep):    ${s2.m2.count} trades | ${s2.m2.winRate}% win | green first: ${s2.m2.mfeLossPct}%`);
     return lines.join('\n');
   };
 
@@ -425,6 +436,7 @@ function formatReport(results) {
         `Setup D — TTrades CISD · 5M entry (${d5s2.count} trades, 60d)`,
         `  2R: ${pct(d5s2.winRate)}  ~${m5(d5s2.avgWinBars)}min to target`,
         `  3R: ${pct(d5s3.winRate)}  ~${m5(d5s3.avgWinBars)}min to target`,
+        mfeStr(d5s2),
       );
     else lines.push(`Setup D — TTrades CISD · 5M entry: no setups found`);
     if (d1s2.count)
@@ -432,6 +444,7 @@ function formatReport(results) {
         `Setup D — TTrades CISD · 1M entry (${d1s2.count} trades, 7d)`,
         `  2R: ${pct(d1s2.winRate)}  ~${d1s2.avgWinBars}min to target`,
         `  3R: ${pct(d1s3.winRate)}  ~${d1s3.avgWinBars}min to target`,
+        mfeStr(d1s2),
       );
     else lines.push(`Setup D — TTrades CISD · 1M entry: no setups found (7d sample)`);
     return lines.join('\n');
