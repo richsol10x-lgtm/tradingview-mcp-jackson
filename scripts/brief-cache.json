@@ -1,0 +1,278 @@
+{
+  "updated": "2026-06-02T13:53:21.385Z",
+  "newsEvents": [],
+  "tickers": {
+    "MNQ": {
+      "key": "MNQ",
+      "price": 30480.25,
+      "timeframes": [
+        {
+          "label": "Daily",
+          "bias": "🟢 BULLISH",
+          "sma20": 29507.825,
+          "sma200": 25566.561943359375
+        },
+        {
+          "label": "4H",
+          "bias": "🟢 BULLISH",
+          "sma20": 30353.3875,
+          "sma200": 28295.03125
+        },
+        {
+          "label": "1H",
+          "bias": "🟡 PULLBACK (bull struct)",
+          "sma20": 30485.9625,
+          "sma200": 29893.1375
+        },
+        {
+          "label": "15M",
+          "bias": "🟡 PULLBACK (bull struct)",
+          "sma20": 30537.4625,
+          "sma200": 30470.34125
+        },
+        {
+          "label": "5M",
+          "bias": "🟡 PULLBACK (bull struct)",
+          "sma20": 30521.85,
+          "sma200": 30475.0825
+        }
+      ],
+      "levels": {
+        "PDH": 30692,
+        "PDL": 30291,
+        "PDC": 30566.25,
+        "PWH": 30535.75,
+        "PWL": 29672,
+        "PWC": 30386.75,
+        "PMH": 30535.75,
+        "PML": 27535,
+        "PMC": 30386.75,
+        "HCOM": 30690.25,
+        "LCOM": 30295.75
+      },
+      "advisory": "MACRO:\nDaily bullish (20/200 SMA). Price 30,480.25 sits between 1H SMA20 (30,485.96) and 1H SMA200 (29,893.14) — pullback structure confirmed across 1H/15M/5M. Move origin (last unmitigated down before this rally) not specified in data — flag as incomplete macro picture. Daily bias remains bullish until price closes below 1H SMA200 at 29,893.\n\nLEVELS:\nPDC 30,566.25 and PWH 30,535.75 (confluent) near price. No active SFP or B&R forming — price not yet sweeping or closing beyond these levels. No immediate setup trigger.\n\nSBS:\nNo 5-move sequence visible in provided data. Cannot confirm move count or entry stage.\n\nFIB STATUS:\nNo pullback or extension data provided. TTrades Fractal Model shows bullish set with C2 at 30,444 and targets at 30,517.5 (near 15M SMA20), 30,554.25 (near PDC), 30,572.63. These align with imbalance zones 30,501.5–30,581 but no 100% extension hit confirmation. First pullback and 50% entry level not calculable from current snapshot.\n\nTTRADES:\nDaily C2/C3 status unknown (data 38h old per model note). 4H bullish structure intact. 15M/5M in pullback — SMA20 both above price, suggesting retest forming. 15M protected swing not yet visible. Probability: 65% IF next candle closes decisively through 5M SMA20 at 30,485.96 with volume. Requires 4H reconfirmation (not stated).\n\nBIAS:\nBullish structure intact across daily/4H; consolidating in valid pullback zone on 15M/5M within bull structure. Wait for retest entry signal.\n\nFLAGS:\n— Daily move origin unspecified; macro incomplete.\n— No B&R or SFP at PDC/PWH yet triggered.\n— No SBS move count confirmed.\n— TTrades fractal data 38h old; 4H confirmation required before 15M entry.\n— First pullback ratio and 100% extension not yet met; entry before 100% extension violates FIB GEOMETRY rule.\n— Price currently between pullback and resistance — zone of caution. Do not enter yet.\n\nACTION: Wait for 15M retest at/above 5M SMA20",
+      "backtest": {
+        "setupA": {
+          "2R": {
+            "count": 11,
+            "wins": 5,
+            "losses": 6,
+            "bes": 0,
+            "winRate": 45,
+            "beRate": 0,
+            "avgWinBars": 0,
+            "avgLossBars": 0,
+            "mfeLosses": 6,
+            "mfeLossPct": 100,
+            "avgLossMfeR": 0.76,
+            "pct05R": 67,
+            "pct1R": 33
+          },
+          "3R": {
+            "count": 11,
+            "wins": 3,
+            "losses": 8,
+            "bes": 0,
+            "winRate": 27,
+            "beRate": 0,
+            "avgWinBars": 0,
+            "avgLossBars": 0,
+            "mfeLosses": 8,
+            "mfeLossPct": 100,
+            "avgLossMfeR": 1.2,
+            "pct05R": 75,
+            "pct1R": 50
+          }
+        },
+        "setupB": {
+          "2R": {
+            "count": 32,
+            "wins": 9,
+            "losses": 23,
+            "bes": 0,
+            "winRate": 28,
+            "beRate": 0,
+            "avgWinBars": 12,
+            "avgLossBars": 8,
+            "mfeLosses": 23,
+            "mfeLossPct": 100,
+            "avgLossMfeR": 0.75,
+            "pct05R": 52,
+            "pct1R": 35
+          },
+          "3R": {
+            "count": 31,
+            "wins": 7,
+            "losses": 24,
+            "bes": 0,
+            "winRate": 23,
+            "beRate": 0,
+            "avgWinBars": 38,
+            "avgLossBars": 8,
+            "mfeLosses": 24,
+            "mfeLossPct": 100,
+            "avgLossMfeR": 0.84,
+            "pct05R": 54,
+            "pct1R": 38
+          }
+        },
+        "setupC": {
+          "2R": {
+            "count": 82,
+            "wins": 41,
+            "losses": 41,
+            "bes": 0,
+            "winRate": 50,
+            "beRate": 0,
+            "avgWinBars": 18,
+            "avgLossBars": 11,
+            "mfeLosses": 39,
+            "mfeLossPct": 95,
+            "avgLossMfeR": 0.83,
+            "pct05R": 61,
+            "pct1R": 39,
+            "m1": {
+              "count": 62,
+              "wins": 31,
+              "losses": 31,
+              "bes": 0,
+              "winRate": 50,
+              "beRate": 0,
+              "avgWinBars": 21,
+              "avgLossBars": 11,
+              "mfeLosses": 29,
+              "mfeLossPct": 94,
+              "avgLossMfeR": 0.84,
+              "pct05R": 58,
+              "pct1R": 39
+            },
+            "m2": {
+              "count": 20,
+              "wins": 10,
+              "losses": 10,
+              "bes": 0,
+              "winRate": 50,
+              "beRate": 0,
+              "avgWinBars": 8,
+              "avgLossBars": 12,
+              "mfeLosses": 10,
+              "mfeLossPct": 100,
+              "avgLossMfeR": 0.82,
+              "pct05R": 70,
+              "pct1R": 40
+            }
+          },
+          "3R": {
+            "count": 75,
+            "wins": 25,
+            "losses": 50,
+            "bes": 0,
+            "winRate": 33,
+            "beRate": 0,
+            "avgWinBars": 30,
+            "avgLossBars": 13,
+            "mfeLosses": 48,
+            "mfeLossPct": 96,
+            "avgLossMfeR": 1.14,
+            "pct05R": 68,
+            "pct1R": 50,
+            "m1": {
+              "count": 56,
+              "wins": 18,
+              "losses": 38,
+              "bes": 0,
+              "winRate": 32,
+              "beRate": 0,
+              "avgWinBars": 31,
+              "avgLossBars": 14,
+              "mfeLosses": 36,
+              "mfeLossPct": 95,
+              "avgLossMfeR": 1.17,
+              "pct05R": 66,
+              "pct1R": 50
+            },
+            "m2": {
+              "count": 19,
+              "wins": 7,
+              "losses": 12,
+              "bes": 0,
+              "winRate": 37,
+              "beRate": 0,
+              "avgWinBars": 30,
+              "avgLossBars": 12,
+              "mfeLosses": 12,
+              "mfeLossPct": 100,
+              "avgLossMfeR": 1.05,
+              "pct05R": 75,
+              "pct1R": 50
+            }
+          }
+        },
+        "setupD5": {
+          "2R": {
+            "count": 41,
+            "wins": 14,
+            "losses": 27,
+            "bes": 0,
+            "winRate": 34,
+            "beRate": 0,
+            "avgWinBars": 26,
+            "avgLossBars": 7,
+            "mfeLosses": 27,
+            "mfeLossPct": 100,
+            "avgLossMfeR": 0.62,
+            "pct05R": 44,
+            "pct1R": 19
+          },
+          "3R": {
+            "count": 40,
+            "wins": 13,
+            "losses": 27,
+            "bes": 0,
+            "winRate": 33,
+            "beRate": 0,
+            "avgWinBars": 30,
+            "avgLossBars": 7,
+            "mfeLosses": 27,
+            "mfeLossPct": 100,
+            "avgLossMfeR": 0.62,
+            "pct05R": 44,
+            "pct1R": 19
+          }
+        },
+        "setupD1": {
+          "2R": {
+            "count": 10,
+            "wins": 4,
+            "losses": 6,
+            "bes": 0,
+            "winRate": 40,
+            "beRate": 0,
+            "avgWinBars": 21,
+            "avgLossBars": 11,
+            "mfeLosses": 6,
+            "mfeLossPct": 100,
+            "avgLossMfeR": 0.69,
+            "pct05R": 33,
+            "pct1R": 33
+          },
+          "3R": {
+            "count": 10,
+            "wins": 3,
+            "losses": 7,
+            "bes": 0,
+            "winRate": 30,
+            "beRate": 0,
+            "avgWinBars": 35,
+            "avgLossBars": 16,
+            "mfeLosses": 7,
+            "mfeLossPct": 100,
+            "avgLossMfeR": 0.95,
+            "pct05R": 43,
+            "pct1R": 43
+          }
+        }
+      }
+    }
+  }
+}

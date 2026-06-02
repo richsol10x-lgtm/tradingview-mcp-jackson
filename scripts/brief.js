@@ -87,6 +87,36 @@ async function fetchCloses(yahooSymbol, interval, range) {
     .filter(c => typeof c === 'number' && Number.isFinite(c) && c > 0);
 }
 
+async function fetchLivePrice(yahooSymbol) {
+  const url  = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=1m&range=1d`;
+  const res  = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+  const json = await res.json();
+  const meta = json?.chart?.result?.[0]?.meta;
+  if (!meta?.regularMarketPrice) throw new Error(`No live price for ${yahooSymbol}`);
+  return meta.regularMarketPrice;
+}
+
+async function fetchPDLevels(yahooSymbol) {
+  const url  = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSymbol}?interval=1d&range=10d`;
+  const res  = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+  const json = await res.json();
+  const r    = json?.chart?.result?.[0];
+  if (!r) throw new Error(`No daily bars for ${yahooSymbol}`);
+  const ts = r.timestamp;
+  const q  = r.indicators.quote[0];
+  const bars = [];
+  for (let i = 0; i < ts.length; i++) {
+    if ([q.high[i], q.low[i], q.close[i]].some(v => v == null || !isFinite(v))) continue;
+    bars.push({ t: ts[i], h: q.high[i], l: q.low[i], c: q.close[i] });
+  }
+  if (bars.length < 2) return null;
+  // If the last bar is today's partial session, step back to yesterday
+  const todayET  = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const lastDate = new Date(bars[bars.length - 1].t * 1000).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  const prev     = lastDate === todayET ? bars[bars.length - 2] : bars[bars.length - 1];
+  return { PDH: prev.h, PDL: prev.l, PDC: prev.c };
+}
+
 async function analyzeTF(yahooSymbol, tf) {
   let closes = await fetchCloses(yahooSymbol, tf.interval, tf.range);
   if (tf.resample) closes = resample(closes, tf.resample);
@@ -182,16 +212,15 @@ One sentence. Bullish/bearish/neutral + one rule-based reason.
 FLAGS:
 Call out: entry before 100% extension, SBS before move 5, against 200 SMA, first pullback <50%, anything invalidating the setup.`;
 
-async function advisory(results, key, newsEvents = []) {
+async function advisory(results, key, newsEvents = [], livePrice, lvl) {
   const fmt    = n => n?.toLocaleString('en-US', { maximumFractionDigits: 2 }) ?? '—';
   const daily  = results[0];
   const tf4h   = results[1];
   const tf1h   = results[2];
   const tf15m  = results[3];
   const tf5m   = results[4];
-  const lvl    = LEVELS[key] || {};
   const bt     = BTSTATS[key] || {};
-  const price  = tf5m.price;
+  const price  = livePrice ?? tf5m.price;
 
   const now = new Date();
   const etTime = now.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false });
@@ -275,11 +304,19 @@ Give the brief now.`;
 async function analyzeTicker(key, newsEvents = []) {
   const sym = SYMBOLS[key];
   try {
-    const results = await Promise.all(TIMEFRAMES.map(tf => analyzeTF(sym.yahoo, tf)));
-    const adv  = await advisory(results, key, newsEvents);
+    const [results, livePrice, pdLevels] = await Promise.all([
+      Promise.all(TIMEFRAMES.map(tf => analyzeTF(sym.yahoo, tf))),
+      fetchLivePrice(sym.yahoo).catch(() => null),
+      fetchPDLevels(sym.yahoo).catch(() => null),
+    ]);
+
+    // Merge fresh PDH/PDL/PDC over cached levels (keep HCOM/LCOM/PWH/PWL from cache)
+    const lvl = { ...(LEVELS[key] || {}), ...(pdLevels || {}) };
+    const price = livePrice ?? results[4].price;
+
+    const adv  = await advisory(results, key, newsEvents, price, lvl);
     const fmt  = n => n?.toLocaleString('en-US', { maximumFractionDigits: 2 }) ?? '—';
-    const lvl  = LEVELS[key];
-    const lvlLines = lvl ? [
+    const lvlLines = Object.keys(lvl).length ? [
       ``,
       `Levels (Stoic Edge):`,
       `PDH: ${fmt(lvl.PDH)}  PDC: ${fmt(lvl.PDC)}  PDL: ${fmt(lvl.PDL)}`,
@@ -307,7 +344,7 @@ async function analyzeTicker(key, newsEvents = []) {
 
     const section = [
       `━━━━━━━━━━━━━━━━━━━━━━`,
-      `${sym.label} — ${fmt(results[4].price)}`,
+      `${sym.label} — ${fmt(price)}`,
       ``,
       ...results.map(r => r.line),
       ...lvlLines,
@@ -318,9 +355,9 @@ async function analyzeTicker(key, newsEvents = []) {
 
     const data = {
       key,
-      price: results[4].price,
+      price,
       timeframes: results.map(r => ({ label: r.label, bias: r.bias.label, sma20: r.sma20, sma200: r.sma200 })),
-      levels: lvl || {},
+      levels: lvl,
       advisory: adv,
       backtest: BTSTATS[key] || {},
     };
