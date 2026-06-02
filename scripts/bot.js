@@ -83,6 +83,22 @@ checkUpcomingEvents(); // run immediately on start
 const BRIEF_CACHE = join(__dirname, 'brief-cache.json');
 const TRADE_LOG   = join(__dirname, 'trade-log.json');
 
+const YAHOO_SYMBOLS = { MNQ: 'MNQ=F', MES: 'MES=F', MGC: 'MGC=F', SIL: 'SIL=F' };
+
+async function fetchLivePrice(yahooSym) {
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSym}?interval=1m&range=1d`;
+  const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+  const json = await res.json();
+  return json?.chart?.result?.[0]?.meta?.regularMarketPrice ?? null;
+}
+
+async function fetchAllLivePrices() {
+  const pairs = await Promise.all(
+    Object.entries(YAHOO_SYMBOLS).map(async ([key, sym]) => [key, await fetchLivePrice(sym).catch(() => null)])
+  );
+  return Object.fromEntries(pairs);
+}
+
 const QA_SYSTEM = `You are a StoicTA trading advisor. Answer questions about the last market brief in 2-3 sentences. Reference specific price levels and setup names (A or B). Be direct — no fluff. Plain text only — no markdown, no bold, no asterisks.
 
 StoicTA strategy:
@@ -96,15 +112,24 @@ async function askAdvisory(question) {
   catch { return 'No brief data yet — run `brief all` first.'; }
 
   const ageHours = Math.round((Date.now() - new Date(cache.updated).getTime()) / 3600000);
-  const ageNote  = ageHours >= 1 ? ` (brief is ${ageHours}h old)` : '';
+  const ageNote  = ageHours >= 1 ? ` (brief is ${ageHours}h old — SMA/bias from brief, prices are live)` : '';
   const fmt = n => n?.toLocaleString('en-US', { maximumFractionDigits: 2 }) ?? '—';
+
+  // Fetch live prices in parallel with context build — always use these for price questions
+  const [livePrices] = await Promise.all([fetchAllLivePrices()]);
+  const livePriceStr = Object.entries(livePrices)
+    .filter(([, p]) => p != null)
+    .map(([k, p]) => `${k}: ${fmt(p)}`)
+    .join(' | ');
 
   const context = Object.values(cache.tickers).map(t => {
     const tfs = t.timeframes.map(tf =>
       `  ${tf.label}: ${tf.bias} (SMA20: ${fmt(tf.sma20)}, SMA200: ${fmt(tf.sma200)})`
     ).join('\n');
     const l = t.levels;
-    return `${t.key} @ ${fmt(t.price)}:\n${tfs}\n  PDH: ${fmt(l.PDH)}  PDC: ${fmt(l.PDC)}  PDL: ${fmt(l.PDL)}  HCOM: ${fmt(l.HCOM)}  LCOM: ${fmt(l.LCOM)}\n  Advisory: ${t.advisory}`;
+    const live = livePrices[t.key];
+    const priceStr = live != null ? `${fmt(live)} (live)` : `${fmt(t.price)} (cached)`;
+    return `${t.key} @ ${priceStr}:\n${tfs}\n  PDH: ${fmt(l.PDH)}  PDC: ${fmt(l.PDC)}  PDL: ${fmt(l.PDL)}  HCOM: ${fmt(l.HCOM)}  LCOM: ${fmt(l.LCOM)}\n  Advisory: ${t.advisory}`;
   }).join('\n\n');
 
   const news = cache.newsEvents?.length
@@ -116,7 +141,7 @@ async function askAdvisory(question) {
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 250,
       system: QA_SYSTEM,
-      messages: [{ role: 'user', content: `Last brief${ageNote}:\n\n${context}\n\nToday's news:\n${news}\n\nQuestion: ${question}` }],
+      messages: [{ role: 'user', content: `LIVE PRICES NOW: ${livePriceStr}\n\nLast brief${ageNote}:\n\n${context}\n\nToday's news:\n${news}\n\nQuestion: ${question}` }],
     });
     return msg.content[0].text.trim();
   } catch (e) {
