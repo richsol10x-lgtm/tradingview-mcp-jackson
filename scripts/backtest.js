@@ -73,58 +73,73 @@ function buildDailyLevels(dailyBars) {
 // C2 bearish: bar sweeps prev high, closes back below.
 // C3 bullish: prev was a failed bullish C2 (swept below, didn't close back) → current closes above prev.open.
 // C3 bearish: mirror.
-function build15mSignals(bars15m) {
+function buildBiasSignals(bars, barSizeSeconds) {
   const signals = [];
-  for (let i = 2; i < bars15m.length; i++) {
-    const bar  = bars15m[i];
-    const prev = bars15m[i - 1];
+  for (let i = 2; i < bars.length; i++) {
+    const bar  = bars[i];
+    const prev = bars[i - 1];
     let bias   = null;
-    // C2
     if      (bar.l < prev.l && bar.c > prev.l) bias = 'BULLISH';
     else if (bar.h > prev.h && bar.c < prev.h) bias = 'BEARISH';
-    // C3 (prev was a failed C2 attempt)
     else if (i >= 3) {
-      const prev2 = bars15m[i - 2];
+      const prev2 = bars[i - 2];
       if      (prev.l < prev2.l && prev.c <= prev2.l && bar.c > prev.o) bias = 'BULLISH';
       else if (prev.h > prev2.h && prev.c >= prev2.h && bar.c < prev.o) bias = 'BEARISH';
     }
-    if (bias) signals.push({ closeTime: bar.t + 900, bias });
+    if (bias) signals.push({ closeTime: bar.t + barSizeSeconds, bias });
   }
   return signals;
 }
 
 function stats(trades) {
-  if (!trades.length) return { count: 0, wins: 0, losses: 0, winRate: 0, avgWinBars: 0, avgLossBars: 0, mfeLosses: 0, mfeLossPct: 0 };
+  if (!trades.length) return { count: 0, wins: 0, losses: 0, bes: 0, winRate: 0, beRate: 0, avgWinBars: 0, avgLossBars: 0, mfeLosses: 0, mfeLossPct: 0, avgLossMfeR: 0, pct05R: 0, pct1R: 0 };
   const wins      = trades.filter(t => t.result === 'WIN');
   const losses    = trades.filter(t => t.result === 'LOSS');
+  const bes       = trades.filter(t => t.result === 'BE');
   const mfeLosses = losses.filter(t => t.wentFavorable).length;
   const avg       = arr => arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : 0;
+  const avgR      = arr => arr.length ? Math.round((arr.reduce((a, b) => a + b, 0) / arr.length) * 100) / 100 : 0;
+  const pct       = (n, d) => d ? Math.round((n / d) * 100) : 0;
   return {
     count:       trades.length,
     wins:        wins.length,
     losses:      losses.length,
-    winRate:     Math.round((wins.length / trades.length) * 100),
+    bes:         bes.length,
+    winRate:     pct(wins.length, trades.length),
+    beRate:      pct(bes.length,  trades.length),
     avgWinBars:  avg(wins.map(t => t.bars)),
     avgLossBars: avg(losses.map(t => t.bars)),
     mfeLosses,
-    mfeLossPct:  losses.length ? Math.round((mfeLosses / losses.length) * 100) : 0,
+    mfeLossPct:  pct(mfeLosses, losses.length),
+    avgLossMfeR: avgR(losses.map(t => t.mfeR)),
+    pct05R:      pct(losses.filter(t => t.mfeR >= 0.5).length, losses.length),
+    pct1R:       pct(losses.filter(t => t.mfeR >= 1.0).length, losses.length),
   };
 }
 
-function checkOutcome(bars, fromIdx, entryPrice, stopPrice, targetPrice, maxHold = MAX_HOLD) {
-  const isLong = targetPrice > entryPrice;
-  let wentFavorable = false;
+function checkOutcome(bars, fromIdx, entryPrice, stopPrice, targetPrice, maxHold = MAX_HOLD, beLevel = null) {
+  const isLong        = targetPrice > entryPrice;
+  const rDist         = isLong ? entryPrice - stopPrice : stopPrice - entryPrice;
+  let wentFavorable   = false;
+  let maxFav          = 0;
+  let atBE            = false;
+  let effectiveStop   = stopPrice;
   for (let i = fromIdx; i < Math.min(fromIdx + maxHold, bars.length); i++) {
     const { h, l } = bars[i];
-    if (isLong  && h > entryPrice) wentFavorable = true;
-    if (!isLong && l < entryPrice) wentFavorable = true;
-    const hitTarget = isLong             ? h >= targetPrice : l <= targetPrice;
-    const hitStop   = stopPrice < entryPrice ? l <= stopPrice : h >= stopPrice;
-    if (hitTarget && hitStop) return { result: 'WIN',  bars: i - fromIdx, wentFavorable };
-    if (hitTarget) return { result: 'WIN',  bars: i - fromIdx, wentFavorable };
-    if (hitStop)   return { result: 'LOSS', bars: i - fromIdx, wentFavorable };
+    const fav = isLong ? h - entryPrice : entryPrice - l;
+    if (fav > maxFav) { maxFav = fav; if (fav > 0) wentFavorable = true; }
+    if (!atBE && beLevel !== null && rDist > 0 && maxFav / rDist >= beLevel) {
+      atBE = true;
+      effectiveStop = entryPrice;
+    }
+    const mfeR      = rDist > 0 ? maxFav / rDist : 0;
+    const hitTarget = isLong ? h >= targetPrice : l <= targetPrice;
+    const hitStop   = isLong ? l <= effectiveStop : h >= effectiveStop;
+    if (hitTarget && hitStop) return { result: 'WIN', bars: i - fromIdx, wentFavorable, mfeR };
+    if (hitTarget) return { result: 'WIN',  bars: i - fromIdx, wentFavorable, mfeR };
+    if (hitStop)   return { result: atBE ? 'BE' : 'LOSS', bars: i - fromIdx, wentFavorable, mfeR };
   }
-  return { result: 'EXPIRED', bars: maxHold, wentFavorable };
+  return { result: 'EXPIRED', bars: maxHold, wentFavorable, mfeR: rDist > 0 ? maxFav / rDist : 0 };
 }
 
 function runSetupA(bars, levels, rMultiplier = 2) {
@@ -172,7 +187,7 @@ function runSetupA(bars, levels, rMultiplier = 2) {
   return trades;
 }
 
-function runSetupB(bars, levels, rMultiplier = 2) {
+function runSetupB(bars, levels, rMultiplier = 2, beLevel = null) {
   const trades   = [];
   const usedDays = new Set();
 
@@ -200,7 +215,7 @@ function runSetupB(bars, levels, rMultiplier = 2) {
       const rDist = dir === 'LONG' ? entry - stop : stop - entry;
       if (rDist <= 0) continue;
       const target = dir === 'LONG' ? entry + rMultiplier * rDist : entry - rMultiplier * rDist;
-      const out    = checkOutcome(bars, i + 1, entry, stop, target);
+      const out    = checkOutcome(bars, i + 1, entry, stop, target, MAX_HOLD, beLevel);
       if (out.result !== 'EXPIRED')
         trades.push({ dir, level: key, entry, stop, target, ...out, date: dateStr(bar.t) });
     }
@@ -209,7 +224,7 @@ function runSetupB(bars, levels, rMultiplier = 2) {
 }
 
 // Setup C — SBS 5-move sequence, both directions, both models
-function runSetupC(bars, rMultiplier = 2) {
+function runSetupC(bars, rMultiplier = 2, beLevel = null) {
   const trades   = [];
   const usedDays = new Set();
 
@@ -263,7 +278,7 @@ function runSetupC(bars, rMultiplier = 2) {
               const entry = bars[j].c;
               const rDist = entry - m4Low;
               if (rDist > 0) {
-                const out = checkOutcome(bars, j + 1, entry, m4Low, entry + rMultiplier * rDist);
+                const out = checkOutcome(bars, j + 1, entry, m4Low, entry + rMultiplier * rDist, MAX_HOLD, beLevel);
                 if (out.result !== 'EXPIRED')
                   trades.push({ dir: 'LONG', model, entry, stop: m4Low, ...out, date: dateStr(bars[j].t) });
               }
@@ -323,7 +338,7 @@ function runSetupC(bars, rMultiplier = 2) {
               const entry = bars[j].c;
               const rDist = m4High - entry;
               if (rDist > 0) {
-                const out = checkOutcome(bars, j + 1, entry, m4High, entry - rMultiplier * rDist);
+                const out = checkOutcome(bars, j + 1, entry, m4High, entry - rMultiplier * rDist, MAX_HOLD, beLevel);
                 if (out.result !== 'EXPIRED')
                   trades.push({ dir: 'SHORT', model, entry, stop: m4High, ...out, date: dateStr(bars[j].t) });
               }
@@ -365,7 +380,7 @@ function findCISD(bars, idx, direction) {
 // Bias: 15M C2/C3 signal (build15mSignals). Entry: CISD on cisdBars (1M or 5M).
 // Signal stays valid for up to 1 hour (4 × 15M bars) after the C2/C3 close.
 // One trade per day per direction per timeframe.
-function runSetupD(cisdBars, signals15m, rMultiplier = 2, maxHoldBars = MAX_HOLD) {
+function runSetupD(cisdBars, biasSignals, rMultiplier = 2, maxHoldBars = MAX_HOLD, beLevel = null, validityWindow = 3600) {
   const trades   = [];
   const usedDays = new Set();
   let   sigPtr   = 0;
@@ -374,11 +389,10 @@ function runSetupD(cisdBars, signals15m, rMultiplier = 2, maxHoldBars = MAX_HOLD
     const bar = cisdBars[i];
     if (!isNYSession(bar.t)) continue;
 
-    // Advance two-pointer to most recent 15M signal that has closed
-    while (sigPtr + 1 < signals15m.length && signals15m[sigPtr + 1].closeTime <= bar.t) sigPtr++;
+    while (sigPtr + 1 < biasSignals.length && biasSignals[sigPtr + 1].closeTime <= bar.t) sigPtr++;
 
-    const sig = signals15m[sigPtr];
-    if (!sig || sig.closeTime > bar.t || bar.t - sig.closeTime > 3600) continue;
+    const sig = biasSignals[sigPtr];
+    if (!sig || sig.closeTime > bar.t || bar.t - sig.closeTime > validityWindow) continue;
 
     const dBias = sig.bias;
     const cisd  = findCISD(cisdBars, i, dBias);
@@ -396,7 +410,7 @@ function runSetupD(cisdBars, signals15m, rMultiplier = 2, maxHoldBars = MAX_HOLD
 
     const target = dBias === 'BULLISH' ? entry + rMultiplier * rDist : entry - rMultiplier * rDist;
     const dir    = dBias === 'BULLISH' ? 'LONG' : 'SHORT';
-    const out    = checkOutcome(cisdBars, i + 1, entry, stop, target, maxHoldBars);
+    const out    = checkOutcome(cisdBars, i + 1, entry, stop, target, maxHoldBars, beLevel);
     if (out.result !== 'EXPIRED')
       trades.push({ dir, entry, stop, target, ...out, date: dateStr(bar.t) });
   }
@@ -407,12 +421,17 @@ function formatReport(results) {
   const m5  = b => b * 5;
   const pct = n => String(n + '%').padEnd(5);
 
-  const mfeStr = s => s.losses ? `  Losses that went green first: ${s.mfeLosses}/${s.losses} (${s.mfeLossPct}%)` : '';
+  const mfeStr  = s => s.losses
+    ? `  Remaining losses green first: ${s.mfeLosses}/${s.losses} (${s.mfeLossPct}%) | avg peak: ${s.avgLossMfeR}R | ≥0.5R: ${s.pct05R}% | ≥1R: ${s.pct1R}%`
+    : '';
+  const winLine = (s, mins) => s.beRate > 0
+    ? `${s.winRate}% win | ${s.beRate}% BE  ~${mins}min to target`
+    : `${pct(s.winRate)}  ~${mins}min to target`;
 
   const rowAB = (label, s2, s3) => s2.count
     ? `${label} (${s2.count} trades)\n` +
-      `  2R: ${pct(s2.winRate)}  ~${m5(s2.avgWinBars)}min to target\n` +
-      `  3R: ${pct(s3.winRate)}  ~${m5(s3.avgWinBars)}min to target\n` +
+      `  2R: ${winLine(s2, m5(s2.avgWinBars))}\n` +
+      `  3R: ${winLine(s3, m5(s3.avgWinBars))}\n` +
       mfeStr(s2)
     : `${label}: no setups found`;
 
@@ -420,8 +439,8 @@ function formatReport(results) {
     if (!s2.count) return `Setup C — SBS: no setups found`;
     const lines = [
       `Setup C — SBS (${s2.count} trades)`,
-      `  2R: ${pct(s2.winRate)}  ~${m5(s2.avgWinBars)}min to target`,
-      `  3R: ${pct(s3.winRate)}  ~${m5(s3.avgWinBars)}min to target`,
+      `  2R: ${winLine(s2, m5(s2.avgWinBars))}`,
+      `  3R: ${winLine(s3, m5(s3.avgWinBars))}`,
       mfeStr(s2),
     ];
     if (s2.m1.count) lines.push(`  M1 (shallow): ${s2.m1.count} trades | ${s2.m1.winRate}% win | green first: ${s2.m1.mfeLossPct}%`);
@@ -434,16 +453,16 @@ function formatReport(results) {
     if (d5s2.count)
       lines.push(
         `Setup D — TTrades CISD · 5M entry (${d5s2.count} trades, 60d)`,
-        `  2R: ${pct(d5s2.winRate)}  ~${m5(d5s2.avgWinBars)}min to target`,
-        `  3R: ${pct(d5s3.winRate)}  ~${m5(d5s3.avgWinBars)}min to target`,
+        `  2R: ${winLine(d5s2, m5(d5s2.avgWinBars))}`,
+        `  3R: ${winLine(d5s3, m5(d5s3.avgWinBars))}`,
         mfeStr(d5s2),
       );
     else lines.push(`Setup D — TTrades CISD · 5M entry: no setups found`);
     if (d1s2.count)
       lines.push(
         `Setup D — TTrades CISD · 1M entry (${d1s2.count} trades, 7d)`,
-        `  2R: ${pct(d1s2.winRate)}  ~${d1s2.avgWinBars}min to target`,
-        `  3R: ${pct(d1s3.winRate)}  ~${d1s3.avgWinBars}min to target`,
+        `  2R: ${winLine(d1s2, d1s2.avgWinBars)}`,
+        `  3R: ${winLine(d1s3, d1s3.avgWinBars)}`,
         mfeStr(d1s2),
       );
     else lines.push(`Setup D — TTrades CISD · 1M entry: no setups found (7d sample)`);
@@ -465,7 +484,7 @@ function formatReport(results) {
 
   return [
     `📊 STOIC EDGE — FULL BACKTEST`,
-    `A+B: StoicTA PDH/PDL  |  C: SBS (5M)  |  D: TTrades 15M C2/C3 → 5M+1M CISD`,
+    `A+B: StoicTA PDH/PDL  |  C: SBS (5M)  |  D5: TTrades 1H C2/C3 → 5M CISD  |  D1: TTrades 15M C2/C3 → 1M CISD`,
     `A/B/C/D5: 60-day  |  D1: 7-day  |  NY session  |  Structural stops`,
     ``,
     ...sections,
@@ -477,15 +496,17 @@ function formatReport(results) {
 
 async function analyzeTicker(key) {
   const sym = SYMBOLS[key];
-  const [bars5m, barsDaily, bars15m, bars1m] = await Promise.all([
+  const [bars5m, barsDaily, bars15m, bars1h, bars1m] = await Promise.all([
     fetchOHLCV(sym, '5m',  '60d'),
     fetchOHLCV(sym, '1d',  '6mo'),
     fetchOHLCV(sym, '15m', '60d'),
+    fetchOHLCV(sym, '60m', '60d'),
     fetchOHLCV(sym, '1m',  '7d'),
   ]);
 
-  const levels   = buildDailyLevels(barsDaily);
-  const sigs15m  = build15mSignals(bars15m);
+  const levels  = buildDailyLevels(barsDaily);
+  const sigs15m = buildBiasSignals(bars15m, 900);
+  const sigs1h  = buildBiasSignals(bars1h,  3600);
 
   const tradesC2R = runSetupC(bars5m, 2);
   const tradesC3R = runSetupC(bars5m, 3);
@@ -497,11 +518,11 @@ async function analyzeTicker(key) {
 
   return {
     key,
-    setupA:  { '2R': stats(runSetupA(bars5m, levels, 2)), '3R': stats(runSetupA(bars5m, levels, 3)) },
-    setupB:  { '2R': stats(runSetupB(bars5m, levels, 2)), '3R': stats(runSetupB(bars5m, levels, 3)) },
-    setupC:  { '2R': mkC(tradesC2R), '3R': mkC(tradesC3R) },
-    setupD5: { '2R': stats(runSetupD(bars5m,  sigs15m, 2, MAX_HOLD)),   '3R': stats(runSetupD(bars5m,  sigs15m, 3, MAX_HOLD)) },
-    setupD1: { '2R': stats(runSetupD(bars1m,  sigs15m, 2, MAX_HOLD_1M)),'3R': stats(runSetupD(bars1m,  sigs15m, 3, MAX_HOLD_1M)) },
+    setupA:  { '2R': stats(runSetupA(bars5m, levels, 2)),      '3R': stats(runSetupA(bars5m, levels, 3)) },
+    setupB:  { '2R': stats(runSetupB(bars5m, levels, 2)),      '3R': stats(runSetupB(bars5m, levels, 3)) },
+    setupC:  { '2R': mkC(tradesC2R),                           '3R': mkC(tradesC3R) },
+    setupD5: { '2R': stats(runSetupD(bars5m, sigs1h,  2, MAX_HOLD,    null, 14400)), '3R': stats(runSetupD(bars5m, sigs1h,  3, MAX_HOLD,    null, 14400)) },
+    setupD1: { '2R': stats(runSetupD(bars1m, sigs15m, 2, MAX_HOLD_1M, null, 3600)),  '3R': stats(runSetupD(bars1m, sigs15m, 3, MAX_HOLD_1M, null, 3600)) },
   };
 }
 
