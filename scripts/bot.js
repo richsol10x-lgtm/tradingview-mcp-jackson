@@ -141,7 +141,7 @@ async function askAdvisory(question) {
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 250,
       system: QA_SYSTEM,
-      messages: [{ role: 'user', content: `LIVE PRICES NOW: ${livePriceStr}\n\nLast brief${ageNote}:\n\n${context}\n\nToday's news:\n${news}\n\nQuestion: ${question}` }],
+      messages: [{ role: 'user', content: `TIME: ${new Date().toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })} ET\nLIVE PRICES NOW: ${livePriceStr}\n\nLast brief${ageNote}:\n\n${context}\n\nToday's news:\n${news}\n\nQuestion: ${question}` }],
     });
     return msg.content[0].text.trim();
   } catch (e) {
@@ -254,6 +254,8 @@ async function handleMessage(text) {
   if (cmd === 'help' || cmd === 'commands') {
     await send(
       `Commands:\n` +
+      `• price MNQ / MES / MGC / SIL\n` +
+      `• price all\n` +
       `• brief all\n` +
       `• brief MNQ / MES / MGC / SIL\n` +
       `• backtest all\n` +
@@ -300,6 +302,25 @@ async function handleMessage(text) {
       return;
     }
     await send(`Unknown ticker "${ticker}". Valid: ${TICKERS.join(', ')}`);
+    return;
+  }
+
+  if (cmd === 'price' || cmd === 'price all') {
+    const prices = await fetchAllLivePrices();
+    const lines = Object.entries(prices).map(([k, p]) =>
+      p != null ? `${k}: ${p.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : `${k}: unavailable`
+    );
+    await send(`Live prices:\n${lines.join('\n')}`);
+    return;
+  }
+
+  const priceMatch = cmd.match(/^price\s+([a-z]+)$/i);
+  if (priceMatch) {
+    const ticker = priceMatch[1].toUpperCase();
+    const sym = YAHOO_SYMBOLS[ticker];
+    if (!sym) { await send(`Unknown ticker. Valid: ${Object.keys(YAHOO_SYMBOLS).join(', ')}`); return; }
+    const p = await fetchLivePrice(sym).catch(() => null);
+    await send(p != null ? `${ticker}: ${p.toLocaleString('en-US', { maximumFractionDigits: 2 })}` : `${ticker}: price unavailable`);
     return;
   }
 
