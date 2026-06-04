@@ -99,12 +99,12 @@ async function fetchAllLivePrices() {
   return Object.fromEntries(pairs);
 }
 
-const QA_SYSTEM = `You are a StoicTA trading advisor. Answer questions about the last market brief in 2-3 sentences. Reference specific price levels and setup names (A or B). Be direct — no fluff. Plain text only — no markdown, no bold, no asterisks.
+const QA_SYSTEM = `You are a StoicTA trading advisor. Answer questions about the last market brief in 2-3 sentences. Be direct — no fluff. Plain text only — no markdown, no bold, no asterisks.
 
-StoicTA strategy:
-- Setup A: break of level → retest from other side at 5M 20 SMA confluence → enter. Target 2.618 fib.
-- Setup B: wick sweeps level (SFP) → fails to close through → reverses. Enter on SFP candle close.
-- Key levels: PDH/PDL/PDC (prior day), HCOM/LCOM (composite), PWH/PWL (prior week).`;
+Setups: A=B&R (break PDH/PDL/PDC → retest → enter), B=SFP (sweep level + close fails back inside → reverse), C=SBS 5-move sequence (only enter at Move 5 reversal — M1 shallow M4 at range top, M2 deep into move origin = A+), D=TTrades CISD (1H C2/C3 bias → 5M or 1M CISD entry).
+Fib geometry on all entries: first pullback ≥50% → wait 100% extension → enter second pullback at 50%. Target 2.618 default.
+Key levels: PDH/PDL/PDC (prior day), HCOM/LCOM (monthly composite), PWH/PWL (prior week).
+Macro: above both 20/200 SMA = bullish only. Below both = bearish only. Between = caution.`;
 
 async function askAdvisory(question) {
   let cache;
@@ -156,22 +156,28 @@ async function parseTrade(description) {
   const prompt = `Trade: "${description}"
 
 Extract these fields (use null if unknown):
-- setup: "SFP" | "B&R" | "Fractal" | "Post-Stop" | null
+- setup: "A" | "B" | "C" | "D5" | "D1" | null   (A=B&R, B=SFP, C=SBS, D5=CISD 5M entry, D1=CISD 1M entry)
 - ticker: "MNQ" | "MES" | "MGC" | "SIL" | null
-- nearDailyLevel: true | false | null
-- stopStructural: true | false | null
-- cisdConfirmed: true | false | null
-- projectionUsed: true | false | null
-- rejectionZoneDip: true | false | null
-- beAt1r1: true | false | null
+- dir: "LONG" | "SHORT" | null
+- model: "M1" | "M2" | null   (Setup C only — M1=shallow M4, M2=deep into move origin)
+- entryPrice: number | null
+- stopPrice: number | null
+- targetPrice: number | null
 - outcome: "TP" | "SL" | "BE" | "open" | null
-- rMultiple: number | null
+- rMultiple: number | null   (actual R achieved; negative for losses e.g. -1)
+- nearDailyLevel: true | false | null   (price within 0.3% of PDH/PDL/PDC at entry)
+- atMoveOrigin: true | false | null   (M4 reached move origin — A+ quality for Setup C)
+- biasAligned: true | false | null   (20/200 SMA macro bias matches trade direction)
+- fibSecondPullback: true | false | null   (waited for fib geometry second pullback ≥50%)
+- cisd: true | false | null   (CISD confirmed before entry — required for D setups)
+- stopStructural: true | false | null   (stop placed beyond structural swing, not arbitrary)
+- beAt1r1: true | false | null   (moved stop to BE at 1:1 — flagged bad habit)
 - notes: string | null`;
 
   try {
     const msg = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
-      max_tokens: 300,
+      max_tokens: 400,
       system: PARSE_SYSTEM,
       messages: [{ role: 'user', content: prompt }],
     });
@@ -182,28 +188,28 @@ Extract these fields (use null if unknown):
 async function runReview(trades) {
   const last10 = trades.slice(-10);
   const summary = last10.map(t =>
-    `#${t.id} ${t.setup ?? '?'} ${t.ticker ?? '?'}: outcome=${t.outcome ?? '?'} R=${t.rMultiple ?? '?'} nearLevel=${t.nearDailyLevel} CISD=${t.cisdConfirmed} projection=${t.projectionUsed} BE1:1=${t.beAt1r1}`
+    `#${t.id} ${t.setup ?? '?'}${t.model ? '/'+t.model : ''} ${t.ticker ?? '?'} ${t.dir ?? '?'}: outcome=${t.outcome ?? '?'} R=${t.rMultiple ?? '?'} biasAligned=${t.biasAligned} nearLevel=${t.nearDailyLevel} atMoveOrigin=${t.atMoveOrigin} cisd=${t.cisd} fibPullback=${t.fibSecondPullback} stopStructural=${t.stopStructural} BE1:1=${t.beAt1r1}`
   ).join('\n');
 
-  const prompt = `Review the last 10 trades and give a direct performance breakdown.
+  const prompt = `Review the last 10 trades. Setups: A=B&R, B=SFP, C=SBS (M1=shallow M4, M2=deep into move origin), D5/D1=TTrades CISD.
 
 Trades:
 ${summary}
 
 Answer these 6 points:
-1. Which setup has best avg R?
-2. Which setup gets stopped most?
-3. How many stopped trades moved to TP after? (stop placement issue)
-4. CISD present on valid re-entries vs skipped?
-5. Targets: swing structure targets reached? When fib used instead of structure, did it hit?
-6. ONE specific thing to tighten.
+1. Which setup has best avg R? Which has worst?
+2. Which setup gets stopped most often?
+3. How many stopped trades had biasAligned=false? (entries against macro)
+4. Setup C losses: did M4 reach move origin (atMoveOrigin=true = A+) or stop above it? Flag M2 losses where atMoveOrigin=false.
+5. Setup D losses: was cisd=true? Was biasAligned=true? Flag any D trade where cisd=false.
+6. ONE specific mechanical thing to tighten next 10 trades.
 
-Then flag any of these if triggered:
-- SFP win rate < 40% → flag + ask if market conditions changed
-- Fractal alignment outperforming SFP → note shift
-- BE at 1:1 still happening → call it out
-- CISD being skipped on re-entries → flag each one
-- Projections consistently missing → adjust expectations
+Flag every instance of:
+- BE at 1:1 (beAt1r1=true) → call out each one
+- Entry against bias (biasAligned=false) → flag each one
+- Setup C entered without fibSecondPullback=true → flag
+- Setup D entered without cisd=true → flag
+- stopStructural=false → flag each one
 
 Plain text, no markdown, be direct.`;
 
@@ -231,11 +237,15 @@ async function logTrade(description) {
 
   // Inline flags
   if (parsed.beAt1r1)
-    reply += ' BE at 1:1 flagged — use rejection zone trailing, not BE.';
-  if (parsed.outcome === 'SL' && parsed.notes?.toLowerCase().includes('tp after'))
-    reply += ' Stopped then hit TP — stop placement still the issue.';
-  if (parsed.setup === 'Post-Stop' && parsed.cisdConfirmed === false)
-    reply += ' CISD not confirmed on re-entry — that one should have been skipped.';
+    reply += '\n⚠️ BE at 1:1 flagged — trail below rejection zone at 1.5R, not BE.';
+  if (parsed.biasAligned === false)
+    reply += '\n⚠️ Entry against macro bias — 20/200 SMA not aligned with direction.';
+  if ((parsed.setup === 'D5' || parsed.setup === 'D1') && parsed.cisd === false)
+    reply += '\n⚠️ CISD not confirmed — D setup requires CISD before entry. Should have been skipped.';
+  if (parsed.setup === 'C' && parsed.fibSecondPullback === false)
+    reply += '\n⚠️ Fib second pullback not waited for — entry before confirmation.';
+  if (parsed.stopStructural === false)
+    reply += '\n⚠️ Stop not structural — always place beyond swing high/low, never arbitrary.';
 
   // 10-trade review
   if (count % 10 === 0) {
