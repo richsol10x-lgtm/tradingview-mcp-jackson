@@ -80,8 +80,12 @@ setInterval(checkUpcomingEvents, 5 * 60 * 1000);
 checkUpcomingEvents(); // run immediately on start
 
 // --- Free-form Q&A against last brief ---
-const BRIEF_CACHE = join(__dirname, 'brief-cache.json');
-const TRADE_LOG   = join(__dirname, 'trade-log.json');
+const BRIEF_CACHE        = join(__dirname, 'brief-cache.json');
+const TRADE_LOG          = join(__dirname, 'trade-log.json');
+const OPEN_TRADES_PATH   = join(__dirname, 'open-trades.json');
+const LEVELS_PATH        = join(__dirname, 'levels.json');
+const SIGNAL_CACHE_PATH  = join(__dirname, 'signal-cache.json');
+const SIGNALS_SCRIPT     = join(__dirname, 'signals.js');
 
 const YAHOO_SYMBOLS = { MNQ: 'MNQ=F', MES: 'MES=F', MGC: 'MGC=F', SIL: 'SIL=F' };
 
@@ -105,6 +109,24 @@ Setups: A=B&R (break PDH/PDL/PDC → retest → enter), B=SFP (sweep level + clo
 Fib geometry on all entries: first pullback ≥50% → wait 100% extension → enter second pullback at 50%. Target 2.618 default.
 Key levels: PDH/PDL/PDC (prior day), HCOM/LCOM (monthly composite), PWH/PWL (prior week).
 Macro: above both 20/200 SMA = bullish only. Below both = bearish only. Between = caution.`;
+
+function loadOpenTrades() {
+  try { return JSON.parse(readFileSync(OPEN_TRADES_PATH, 'utf8')); }
+  catch { return { trades: [] }; }
+}
+
+function loadLevels() {
+  try { return JSON.parse(readFileSync(LEVELS_PATH, 'utf8')); }
+  catch { return {}; }
+}
+
+function etDay() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+}
+
+function fmt(n, dp = 2) {
+  return n != null ? n.toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp }) : '—';
+}
 
 async function askAdvisory(question) {
   let cache;
@@ -263,19 +285,128 @@ async function handleMessage(text) {
 
   if (cmd === 'help' || cmd === 'commands') {
     await send(
-      `Commands:\n` +
-      `• price MNQ / MES / MGC / SIL\n` +
-      `• price all\n` +
-      `• brief all\n` +
-      `• brief MNQ / MES / MGC / SIL\n` +
-      `• backtest all\n` +
-      `• backtest MNQ / MES / MGC / SIL\n` +
-      `• news — today's high-impact events\n` +
-      `• news week — full week calendar\n` +
-      `• log [trade] — log a trade\n` +
-      `  e.g. log SFP MNQ PDH, hit TP 2.1R\n` +
+      `PRICES & LEVELS\n` +
+      `• price MNQ / MES / MGC / SIL / all\n` +
+      `• levels — all stored levels\n` +
+      `• levels MNQ / MES / MGC / SIL\n` +
+      `• status — live price vs PDH/PDL for all\n` +
+      `\nSIGNALS & TRADES\n` +
+      `• signals — today's signal history + outcomes\n` +
+      `• trades — open trades + status\n` +
+      `• close MNQ / MES / MGC / SIL — manual close\n` +
+      `• scan — run signal scan now\n` +
+      `\nBRIEFS & ANALYSIS\n` +
+      `• brief all / brief MNQ / MES / MGC / SIL\n` +
+      `• backtest all / backtest [TICKER]\n` +
+      `• news / news week\n` +
+      `\nTRADE LOG\n` +
+      `• log [trade] — e.g. log SFP MNQ PDH, hit TP 2.1R\n` +
+      `• review — run 10-trade review now\n` +
       `\nAnything else = Q&A against last brief`
     );
+    return;
+  }
+
+  // --- Levels ---
+  if (cmd === 'levels' || cmd.startsWith('levels ')) {
+    const levels = loadLevels();
+    const arg    = cmd.split(' ')[1]?.toUpperCase();
+    const tickers = arg && levels[arg] ? [arg] : TICKERS;
+    const lines = tickers.map(t => {
+      const l = levels[t];
+      if (!l) return `${t}: no data`;
+      return `${t}  PDH ${fmt(l.PDH, 1)} | PDL ${fmt(l.PDL, 1)} | PDC ${fmt(l.PDC, 1)} | HCOM ${fmt(l.HCOM, 1)} | LCOM ${fmt(l.LCOM, 1)}`;
+    });
+    await send(`Levels (${levels.updated ? new Date(levels.updated).toLocaleDateString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric' }) : 'cached'}):\n${lines.join('\n')}`);
+    return;
+  }
+
+  // --- Status: live price vs key levels ---
+  if (cmd === 'status') {
+    const levels = loadLevels();
+    const prices = await fetchAllLivePrices();
+    const lines  = TICKERS.map(t => {
+      const p = prices[t];
+      const l = levels[t];
+      if (!p || !l) return `${t}: unavailable`;
+      const pctPDH = ((p - l.PDH) / l.PDH * 100).toFixed(2);
+      const pctPDL = ((p - l.PDL) / l.PDL * 100).toFixed(2);
+      const vs = n => (n > 0 ? `+${n}` : `${n}`) + '%';
+      return `${t} @ ${fmt(p, 1)}  |  PDH ${vs(pctPDH)}  |  PDL ${vs(pctPDL)}  |  PDC ${fmt(l.PDC, 1)}`;
+    });
+    await send(`Status:\n${lines.join('\n')}`);
+    return;
+  }
+
+  // --- Signals today ---
+  if (cmd === 'signals' || cmd === 'signals today') {
+    let cache = {};
+    try { cache = JSON.parse(readFileSync(SIGNAL_CACHE_PATH, 'utf8')); } catch {}
+    const today      = etDay();
+    const todaySigs  = Object.entries(cache).filter(([k]) => k.endsWith(`_${today}`));
+    if (!todaySigs.length) { await send('No signals today.'); return; }
+    const db    = loadOpenTrades();
+    const emoji = { complete: '✅', stopped: '❌', stopped_after_t1: '⚠️', t1_hit: '🎯', open: '🔵', manual: '🔒' };
+    const lines = todaySigs.map(([key, time]) => {
+      const baseKey  = key.replace(`_${today}`, '');
+      const trade    = db.trades.find(t => t.key === baseKey);
+      const status   = trade?.status ?? 'open';
+      const timeStr  = new Date(time).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: true });
+      return `${emoji[status] ?? '•'} ${baseKey} @ ${timeStr} ET → ${status}`;
+    });
+    await send(`Signals today:\n${lines.join('\n')}`);
+    return;
+  }
+
+  // --- Open trades ---
+  if (cmd === 'trades') {
+    const db      = loadOpenTrades();
+    const today   = etDay();
+    const active  = db.trades.filter(t =>
+      ['open', 't1_hit'].includes(t.status) ||
+      t.signaledAt?.startsWith(today)
+    );
+    if (!active.length) { await send('No trades today.'); return; }
+    const emoji = { open: '🔵', t1_hit: '🎯', complete: '✅', stopped: '❌', stopped_after_t1: '⚠️', manual: '🔒' };
+    const lines = active.map(t => {
+      const dir = t.direction === 'LONG' ? '↑' : '↓';
+      const t1  = t.t1 != null ? ` T1:${fmt(t.t1, 1)}` : '';
+      const t2  = t.t2 != null ? ` T2:${fmt(t.t2, 1)}` : '';
+      return `${emoji[t.status] ?? '•'} ${t.ticker} ${t.type} ${dir} @ ${fmt(t.entry, 1)} | Stop:${fmt(t.stop, 1)}${t1}${t2} [${t.status}]`;
+    });
+    await send(`Trades:\n${lines.join('\n')}`);
+    return;
+  }
+
+  // --- Manually close open trade ---
+  const closeMatch = cmd.match(/^close\s+([a-z]+)$/i);
+  if (closeMatch) {
+    const ticker = closeMatch[1].toUpperCase();
+    if (!TICKERS.includes(ticker)) { await send(`Unknown ticker. Valid: ${TICKERS.join(', ')}`); return; }
+    const db   = loadOpenTrades();
+    const open = db.trades.filter(t => t.ticker === ticker && ['open', 't1_hit'].includes(t.status));
+    if (!open.length) { await send(`No open trades for ${ticker}.`); return; }
+    open.forEach(t => { t.status = 'manual'; t.updatedAt = new Date().toISOString(); });
+    writeFileSync(OPEN_TRADES_PATH, JSON.stringify(db, null, 2));
+    await send(`${ticker} — ${open.length} trade(s) marked manually closed.`);
+    return;
+  }
+
+  // --- Trigger immediate signal scan ---
+  if (cmd === 'scan') {
+    await send('Running signal scan...');
+    await runScript(SIGNALS_SCRIPT, null);
+    return;
+  }
+
+  // --- On-demand 10-trade review ---
+  if (cmd === 'review') {
+    let log = { trades: [] };
+    try { log = JSON.parse(readFileSync(TRADE_LOG, 'utf8')); } catch {}
+    if (log.trades.length < 2) { await send('Not enough trades logged yet. Use: log [trade description]'); return; }
+    await send(`Reviewing last ${Math.min(log.trades.length, 10)} trades...`);
+    const review = await runReview(log.trades);
+    await send(review);
     return;
   }
 

@@ -36,8 +36,9 @@ const MIN_SWEEP_PCT = 0.0015;  // 0.15% min wick for valid SFP (matches backtest
 
 // ─── Persistence ──────────────────────────────────────────────────────────────
 
-const CACHE_PATH    = join(__dirname, 'signal-cache.json');
-const FRACTAL_PATH  = join(__dirname, 'fractal-cache.json');
+const CACHE_PATH       = join(__dirname, 'signal-cache.json');
+const FRACTAL_PATH     = join(__dirname, 'fractal-cache.json');
+const OPEN_TRADES_PATH = join(__dirname, 'open-trades.json');
 
 let signalCache = {};
 try { signalCache = JSON.parse(readFileSync(CACHE_PATH, 'utf8')); } catch {}
@@ -64,6 +65,100 @@ function markSent(key) {
     if (signalCache[k] < cutoff) delete signalCache[k];
   }
   try { writeFileSync(CACHE_PATH, JSON.stringify(signalCache, null, 2)); } catch {}
+}
+
+// ─── Open-trades persistence ──────────────────────────────────────────────────
+
+function loadOpenTrades() {
+  try { return JSON.parse(readFileSync(OPEN_TRADES_PATH, 'utf8')); }
+  catch { return { trades: [] }; }
+}
+
+function saveOpenTrade({ key, ticker, setup }) {
+  const db = loadOpenTrades();
+  const { type, direction, level, entryLow, entryHigh, stop, t1, t1Name, t2, t2Name } = setup;
+  const entry = (entryLow + entryHigh) / 2;
+  const id    = `${key}_${etDay().replace(/-/g, '')}`;
+  if (db.trades.some(t => t.id === id)) return;
+  db.trades.push({
+    id, key, ticker, type, direction, level,
+    entry: +entry.toFixed(4), stop: +stop.toFixed(4),
+    t1: t1 != null ? +t1.toFixed(4) : null, t1Name: t1Name ?? null,
+    t2: t2 != null ? +t2.toFixed(4) : null, t2Name: t2Name ?? null,
+    signaledAt: new Date().toISOString(),
+    status: 'open',
+    updatedAt: new Date().toISOString(),
+  });
+  // Prune entries older than 7 days
+  const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  db.trades = db.trades.filter(t => new Date(t.signaledAt).getTime() > cutoff);
+  try { writeFileSync(OPEN_TRADES_PATH, JSON.stringify(db, null, 2)); } catch {}
+}
+
+async function fetchLivePrice(yahooSym) {
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${yahooSym}?interval=1m&range=1d`;
+  const res  = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+  const json = await res.json();
+  return json?.chart?.result?.[0]?.meta?.regularMarketPrice ?? null;
+}
+
+async function checkOpenTrades() {
+  const db     = loadOpenTrades();
+  const active = db.trades.filter(t => t.status === 'open' || t.status === 't1_hit');
+  if (!active.length) return;
+
+  let changed = false;
+  const now   = new Date().toISOString();
+
+  for (const trade of active) {
+    const yahooSym = YAHOO[trade.ticker];
+    if (!yahooSym) continue;
+    const price = await fetchLivePrice(yahooSym).catch(() => null);
+    if (price == null) continue;
+
+    const { direction, entry, stop, t1, t1Name, t2, t2Name, ticker, type } = trade;
+    const isLong  = direction === 'LONG';
+    const riskPts = isLong ? entry - stop : stop - entry;
+    const currR   = riskPts > 0 ? ((isLong ? price - entry : entry - price) / riskPts).toFixed(1) : '?';
+
+    const stopHit = isLong ? price <= stop  : price >= stop;
+    const t1Hit   = t1 != null && (isLong ? price >= t1 : price <= t1);
+    const t2Hit   = t2 != null && (isLong ? price >= t2 : price <= t2);
+
+    if (trade.status === 'open') {
+      if (t2Hit) {
+        trade.status = 'complete'; trade.updatedAt = now; changed = true;
+        const pts = Math.abs(t2 - entry);
+        await telegram(`✅ *T2 HIT — ${ticker} ${type} ${direction}*\nEntry: ${f(entry)} → T2: ${f(t2)} (${t2Name ?? 'T2'})\n+$${Math.round(pts * CV[ticker])}/ct | Trade complete.\n_${etNow()} ET_`);
+      } else if (t1Hit) {
+        if (t2 != null) {
+          trade.status = 't1_hit'; trade.updatedAt = now; changed = true;
+          const pts = Math.abs(t1 - entry);
+          await telegram(`🎯 *T1 HIT — ${ticker} ${type} ${direction}*\nEntry: ${f(entry)} → T1: ${f(t1)} (${t1Name ?? 'T1'})\n+$${Math.round(pts * CV[ticker])}/ct | Runner active → T2: ${f(t2)} (${t2Name ?? 'T2'}).\n_${etNow()} ET_`);
+        } else {
+          trade.status = 'complete'; trade.updatedAt = now; changed = true;
+          const pts = Math.abs(t1 - entry);
+          await telegram(`✅ *T1 HIT — ${ticker} ${type} ${direction}*\nEntry: ${f(entry)} → T1: ${f(t1)} (${t1Name ?? 'T1'})\n+$${Math.round(pts * CV[ticker])}/ct | Trade complete.\n_${etNow()} ET_`);
+        }
+      } else if (stopHit) {
+        trade.status = 'stopped'; trade.updatedAt = now; changed = true;
+        await telegram(`❌ *STOP HIT — ${ticker} ${type} ${direction}*\nEntry: ${f(entry)} → Stop: ${f(stop)}\n-1R | Invalidated.\n_${etNow()} ET_`);
+      }
+    } else if (trade.status === 't1_hit') {
+      if (t2Hit) {
+        trade.status = 'complete'; trade.updatedAt = now; changed = true;
+        const pts = Math.abs(t2 - entry);
+        await telegram(`✅ *T2 HIT — ${ticker} ${type} ${direction}*\nT1 → T2: ${f(t2)} (${t2Name ?? 'T2'})\n+$${Math.round(pts * CV[ticker])}/ct | Full trade complete.\n_${etNow()} ET_`);
+      } else if (stopHit) {
+        trade.status = 'stopped_after_t1'; trade.updatedAt = now; changed = true;
+        await telegram(`⚠️ *RUNNER STOPPED — ${ticker} ${type} ${direction}*\nT1 was hit. Runner stopped at ${f(price)} | ${currR}R\nConsider: move stop to BE after T1.\n_${etNow()} ET_`);
+      }
+    }
+  }
+
+  if (changed) {
+    try { writeFileSync(OPEN_TRADES_PATH, JSON.stringify(db, null, 2)); } catch {}
+  }
 }
 
 // ─── Telegram ─────────────────────────────────────────────────────────────────
@@ -563,6 +658,9 @@ async function scan(ticker, tvData) {
 (async () => {
   const ts = new Date().toISOString();
 
+  // Check open trades first — send updates before scanning for new ones
+  await checkOpenTrades();
+
   // Fetch live TV data for all tickers (switches chart per ticker)
   // Returns null if TV is down — individual tickers will fall back to cache
   const tvData = await fetchAllTVData();
@@ -586,6 +684,7 @@ async function scan(ticker, tvData) {
     console.log(`[SIGNAL] ${key}`);
     await telegram(msg);
     markSent(key);
+    saveOpenTrade({ key, ticker, setup });
     await drawSignal(ticker, setup, macro, !!tvData);
   }
 })();
