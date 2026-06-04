@@ -425,7 +425,7 @@ function detectCISDFib(bars) {
   for (const dir of ['LONG', 'SHORT']) {
     const isLong = dir === 'LONG';
 
-    // Point A: significant swing low/high in the left 60% of lookback
+    // Point A: swing low/high in the left 60% of lookback
     let A = isLong ? Infinity : -Infinity, A_idx = -1;
     for (let i = 0; i < Math.floor(m * 0.6); i++) {
       const v = isLong ? b[i].low : b[i].high;
@@ -433,57 +433,78 @@ function detectCISDFib(bars) {
     }
     if (A_idx < 0 || A_idx > m - 8) continue;
 
-    // Point B: wave 1 high/low after A
+    // Point B: FIRST local peak after A that is followed by a meaningful pullback.
+    // Do NOT take the global highest high — that picks up wave 2 and breaks the anchors.
     let B = isLong ? -Infinity : Infinity, B_idx = -1;
-    for (let i = A_idx + 1; i < m - 4; i++) {
+    for (let i = A_idx + 1; i < m - 5; i++) {
       const v = isLong ? b[i].high : b[i].low;
-      if (isLong ? v > B : v < B) { B = v; B_idx = i; }
+      if (isLong ? v <= A : v >= A) continue; // must move away from A
+
+      // Local peak: next 2 bars go the other way
+      const next1 = isLong ? b[i + 1]?.high : b[i + 1]?.low;
+      const next2 = isLong ? b[i + 2]?.high : b[i + 2]?.low;
+      if (next1 == null || next2 == null) continue;
+      const isPeak = isLong ? next1 < v && next2 < v : next1 > v && next2 > v;
+      if (!isPeak) continue;
+
+      // Meaningful pullback must follow within 12 bars
+      let C_look = isLong ? Infinity : -Infinity;
+      for (let j = i + 1; j < Math.min(i + 13, m); j++) {
+        const cv = isLong ? b[j].low : b[j].high;
+        if (isLong ? cv < C_look : cv > C_look) C_look = cv;
+      }
+      const w1 = Math.abs(v - A);
+      const pb = Math.abs(v - C_look) / w1;
+      if (pb < 0.2 || pb > 0.8) continue;
+
+      B = v; B_idx = i;
+      break; // first valid local peak only
     }
     if (B_idx < 0) continue;
 
     const wave1 = Math.abs(B - A);
-    if (wave1 < A * 0.001) continue; // wave 1 must be at least 0.1% of price
+    if (wave1 < A * 0.001) continue;
 
-    // Point C: first pullback low/high after B (25–75% retrace)
+    // Point C: deepest pullback within 12 bars of B
     let C = isLong ? Infinity : -Infinity, C_idx = -1;
-    for (let i = B_idx + 1; i < m - 2; i++) {
+    for (let i = B_idx + 1; i < Math.min(B_idx + 13, m - 2); i++) {
       const v = isLong ? b[i].low : b[i].high;
       if (isLong ? v < C : v > C) { C = v; C_idx = i; }
     }
     if (C_idx < 0) continue;
     const pbPct = Math.abs(B - C) / wave1;
-    if (pbPct < 0.25 || pbPct > 0.75) continue;
+    if (pbPct < 0.2 || pbPct > 0.8) continue;
 
-    // 100% extension = C projected by wave1
+    // 100% extension = C + wave1 range
     const ext100 = isLong ? C + wave1 : C - wave1;
 
-    // Find wave 2 peak that hit or exceeded 100%
+    // Wave 2 peak: must reach at least 98% of the 100% extension
     let W2 = isLong ? -Infinity : Infinity, W2_idx = -1;
     for (let i = C_idx + 1; i < m; i++) {
       const v   = isLong ? b[i].high : b[i].low;
       const hit = isLong ? v >= ext100 * 0.998 : v <= ext100 * 1.002;
       if (hit && (isLong ? v > W2 : v < W2)) { W2 = v; W2_idx = i; }
     }
-    if (W2_idx < 0) continue; // 100% never hit
+    if (W2_idx < 0) continue;
 
-    // 50% and 61.8% retracement of wave 2 (C → W2)
+    // Entry zone: 50% and 61.8% retracement of wave 2 (C → W2)
     const w2Range  = Math.abs(W2 - C);
     const entry50  = isLong ? W2 - w2Range * 0.5   : W2 + w2Range * 0.5;
     const entry618 = isLong ? W2 - w2Range * 0.618 : W2 + w2Range * 0.618;
 
-    // Most recent bar must be pulling back into the 50–61.8% zone
+    // Most recent bar pulling back into 50–61.8% zone
     const last = b[m - 1];
     const inZone = isLong
       ? last.low <= entry50 * 1.001 && last.close >= entry618 * 0.999
       : last.high >= entry50 * 0.999 && last.close <= entry618 * 1.001;
     if (!inZone) continue;
 
-    // Stop structural — below Point C
+    // Stop below Point C (structural)
     const stop = isLong ? C * 0.9992 : C * 1.0008;
     const risk  = Math.abs(entry50 - stop);
     if (risk === 0) continue;
 
-    // Targets: 161.8% and 200% of trend-based extension from C
+    // Targets: 161.8% and 200% of trend-based extension
     const t1 = isLong ? C + wave1 * 1.618 : C - wave1 * 1.618;
     const t2 = isLong ? C + wave1 * 2.0   : C - wave1 * 2.0;
     if (Math.abs(t1 - entry50) / risk < MIN_RR) continue;
