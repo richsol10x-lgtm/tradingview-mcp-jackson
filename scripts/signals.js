@@ -416,6 +416,88 @@ function detectBnR(bars, levels) {
   return out;
 }
 
+function detectCISDFib(bars) {
+  if (!bars || bars.length < 20) return null;
+
+  const b = bars.slice(-31, -1);
+  const m = b.length;
+
+  for (const dir of ['LONG', 'SHORT']) {
+    const isLong = dir === 'LONG';
+
+    // Point A: significant swing low/high in the left 60% of lookback
+    let A = isLong ? Infinity : -Infinity, A_idx = -1;
+    for (let i = 0; i < Math.floor(m * 0.6); i++) {
+      const v = isLong ? b[i].low : b[i].high;
+      if (isLong ? v < A : v > A) { A = v; A_idx = i; }
+    }
+    if (A_idx < 0 || A_idx > m - 8) continue;
+
+    // Point B: wave 1 high/low after A
+    let B = isLong ? -Infinity : Infinity, B_idx = -1;
+    for (let i = A_idx + 1; i < m - 4; i++) {
+      const v = isLong ? b[i].high : b[i].low;
+      if (isLong ? v > B : v < B) { B = v; B_idx = i; }
+    }
+    if (B_idx < 0) continue;
+
+    const wave1 = Math.abs(B - A);
+    if (wave1 < A * 0.001) continue; // wave 1 must be at least 0.1% of price
+
+    // Point C: first pullback low/high after B (25–75% retrace)
+    let C = isLong ? Infinity : -Infinity, C_idx = -1;
+    for (let i = B_idx + 1; i < m - 2; i++) {
+      const v = isLong ? b[i].low : b[i].high;
+      if (isLong ? v < C : v > C) { C = v; C_idx = i; }
+    }
+    if (C_idx < 0) continue;
+    const pbPct = Math.abs(B - C) / wave1;
+    if (pbPct < 0.25 || pbPct > 0.75) continue;
+
+    // 100% extension = C projected by wave1
+    const ext100 = isLong ? C + wave1 : C - wave1;
+
+    // Find wave 2 peak that hit or exceeded 100%
+    let W2 = isLong ? -Infinity : Infinity, W2_idx = -1;
+    for (let i = C_idx + 1; i < m; i++) {
+      const v   = isLong ? b[i].high : b[i].low;
+      const hit = isLong ? v >= ext100 * 0.998 : v <= ext100 * 1.002;
+      if (hit && (isLong ? v > W2 : v < W2)) { W2 = v; W2_idx = i; }
+    }
+    if (W2_idx < 0) continue; // 100% never hit
+
+    // 50% and 61.8% retracement of wave 2 (C → W2)
+    const w2Range  = Math.abs(W2 - C);
+    const entry50  = isLong ? W2 - w2Range * 0.5   : W2 + w2Range * 0.5;
+    const entry618 = isLong ? W2 - w2Range * 0.618 : W2 + w2Range * 0.618;
+
+    // Most recent bar must be pulling back into the 50–61.8% zone
+    const last = b[m - 1];
+    const inZone = isLong
+      ? last.low <= entry50 * 1.001 && last.close >= entry618 * 0.999
+      : last.high >= entry50 * 0.999 && last.close <= entry618 * 1.001;
+    if (!inZone) continue;
+
+    // Stop structural — below Point C
+    const stop = isLong ? C * 0.9992 : C * 1.0008;
+    const risk  = Math.abs(entry50 - stop);
+    if (risk === 0) continue;
+
+    // Targets: 161.8% and 200% of trend-based extension from C
+    const t1 = isLong ? C + wave1 * 1.618 : C - wave1 * 1.618;
+    const t2 = isLong ? C + wave1 * 2.0   : C - wave1 * 2.0;
+    if (Math.abs(t1 - entry50) / risk < MIN_RR) continue;
+
+    return {
+      type: 'CISD-Fib', direction: dir, level: '100%',
+      entryLow:  isLong ? entry618 : entry50,
+      entryHigh: isLong ? entry50  : entry618,
+      stop, t1, t1Name: '161.8%', t2, t2Name: '200%',
+    };
+  }
+  return null;
+}
+
 function detectCISD(bars) {
   if (!bars || bars.length < 12) return null;
   const b = bars.slice(-21, -1); // last 20 completed bars
@@ -491,6 +573,27 @@ function buildStoicMsg(ticker, setup, macro) {
     `Stop: ${f(stop)}`,
     t1 != null ? `T1: ${f(t1)} (${t1Name}) → ${p1 != null ? `+$${p1}/contract` : '—'}` : null,
     t2 != null ? `T2: ${f(t2)} (${t2Name}) → ${p2 != null ? `+$${p2}/contract` : '—'}` : null,
+    r1 ? `R:R T1: ${r1}:1 | Macro: ${macro}` : `Macro: ${macro}`,
+    `_${etNow()} ET_`,
+  ].filter(Boolean).join('\n');
+}
+
+function buildCISDFibMsg(ticker, setup, macro) {
+  const { direction, entryLow, entryHigh, stop, t1, t1Name, t2, t2Name } = setup;
+  const entry = (entryLow + entryHigh) / 2;
+  const arrow  = direction === 'LONG' ? '↑' : '↓';
+  const p1 = pnl(entry, t1, direction, ticker);
+  const p2 = pnl(entry, t2, direction, ticker);
+  const r1 = rrStr(entry, t1, stop, direction);
+
+  return [
+    `📐 *STOICTA — ${ticker} CISD-Fib Extension*`,
+    `Direction: *${direction}* ${arrow}`,
+    `100% extension hit — limit at 50% retracement`,
+    `Entry zone: ${f(entryLow)}–${f(entryHigh)}`,
+    `Stop: ${f(stop)}`,
+    t1 != null ? `T1: ${f(t1)} (${t1Name}) → ${p1 != null ? `+$${p1}/ct` : '—'}` : null,
+    t2 != null ? `T2: ${f(t2)} (${t2Name}) → ${p2 != null ? `+$${p2}/ct` : '—'}` : null,
     r1 ? `R:R T1: ${r1}:1 | Macro: ${macro}` : `Macro: ${macro}`,
     `_${etNow()} ET_`,
   ].filter(Boolean).join('\n');
@@ -629,6 +732,17 @@ async function scan(ticker, tvData) {
     if (setup.direction === 'LONG'  && !bullishMacro.includes(macro)) continue;
     const key = `${ticker}_BnR_${setup.level}_${setup.direction}`;
     if (!isDupe(key)) out.push({ key, msg: buildStoicMsg(ticker, setup, macro), ticker, setup, macro });
+  }
+
+  // STOICTA — CISD-Fib: 100% extension hit → limit at 50% retracement
+  const cisdFib = detectCISDFib(bars5d);
+  if (cisdFib) {
+    if (cisdFib.direction === 'SHORT' && macro === 'BULLISH') { /* skip */ }
+    else if (cisdFib.direction === 'LONG' && macro === 'BEARISH') { /* skip */ }
+    else {
+      const key = `${ticker}_CISDFib_${cisdFib.direction}`;
+      if (!isDupe(key)) out.push({ key, msg: buildCISDFibMsg(ticker, cisdFib, macro), ticker, setup: cisdFib, macro });
+    }
   }
 
   // TTRADES — CISD + fractal bias
