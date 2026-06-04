@@ -46,6 +46,13 @@ function runScript(scriptPath, arg) {
   });
 }
 
+function runBackground(scriptPath, arg) {
+  const args = arg ? [scriptPath, arg] : [scriptPath];
+  const child = spawn(process.execPath, args, { cwd: join(__dirname, '..') });
+  child.stderr.on('data', d => process.stderr.write(d));
+  child.unref();
+}
+
 function fmtTime(dateStr) {
   return new Date(dateStr).toLocaleTimeString('en-US', {
     timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false
@@ -420,7 +427,7 @@ async function handleMessage(text) {
 
   if (cmd === 'brief all' || cmd === 'brief') {
     await send('Running full brief — one moment...');
-    await runScript(BRIEF, null);
+    runBackground(BRIEF, null);
     return;
   }
 
@@ -429,7 +436,7 @@ async function handleMessage(text) {
     const ticker = briefMatch[1].toUpperCase();
     if (TICKERS.includes(ticker)) {
       await send(`Running ${ticker} brief — one moment...`);
-      await runScript(BRIEF, ticker);
+      runBackground(BRIEF, ticker);
       return;
     }
     await send(`Unknown ticker "${ticker}". Valid: ${TICKERS.join(', ')}`);
@@ -438,7 +445,7 @@ async function handleMessage(text) {
 
   if (cmd === 'backtest' || cmd === 'backtest all') {
     await send('Running 60-day backtest — takes ~15 seconds...');
-    await runScript(BACKTEST, null);
+    runBackground(BACKTEST, null);
     return;
   }
 
@@ -447,7 +454,7 @@ async function handleMessage(text) {
     const ticker = btMatch[1].toUpperCase();
     if (TICKERS.includes(ticker)) {
       await send(`Running ${ticker} backtest — one moment...`);
-      await runScript(BACKTEST, ticker);
+      runBackground(BACKTEST, ticker);
       return;
     }
     await send(`Unknown ticker "${ticker}". Valid: ${TICKERS.join(', ')}`);
@@ -483,12 +490,12 @@ async function handleMessage(text) {
   }
 
   if (cmd === 'news' || cmd === 'news today') {
-    await runScript(NEWS, null);
+    runBackground(NEWS, null);
     return;
   }
 
   if (cmd === 'news week') {
-    await runScript(NEWS, 'week');
+    runBackground(NEWS, 'week');
     return;
   }
 
