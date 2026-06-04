@@ -14,9 +14,10 @@ const require   = createRequire(import.meta.url);
 const env       = require('dotenv').config({ path: join(__dirname, '../.env') }).parsed || {};
 
 // TV core — imported dynamically after health check succeeds
-import * as coreChart  from '../src/core/chart.js';
-import * as coreData   from '../src/core/data.js';
-import * as coreHealth from '../src/core/health.js';
+import * as coreChart   from '../src/core/chart.js';
+import * as coreData    from '../src/core/data.js';
+import * as coreHealth  from '../src/core/health.js';
+import * as coreDrawing from '../src/core/drawing.js';
 
 const TELEGRAM_TOKEN   = env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = env.TELEGRAM_CHAT_ID;
@@ -45,14 +46,23 @@ let FRACTAL = {};
 try { FRACTAL = JSON.parse(readFileSync(FRACTAL_PATH, 'utf8')); } catch {}
 
 const FIB_KEYS = ['-4.5', '-4', '-2.5', '-2', '-1', '0', '1'];
-const DEDUP_MS = 30 * 60 * 1000;
+const MIN_RR   = 2.0;  // minimum R:R at T1 — strategy rule: never below 2:1
 
+// Day-based dedup: one signal per level/direction per ET calendar day
+function etDay() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+}
 function isDupe(key) {
-  const t = signalCache[key];
-  return t && Date.now() - t < DEDUP_MS;
+  return !!signalCache[`${key}_${etDay()}`];
 }
 function markSent(key) {
-  signalCache[key] = Date.now();
+  const dayKey = `${key}_${etDay()}`;
+  signalCache[dayKey] = Date.now();
+  // Prune entries older than 7 days
+  const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  for (const k of Object.keys(signalCache)) {
+    if (signalCache[k] < cutoff) delete signalCache[k];
+  }
   try { writeFileSync(CACHE_PATH, JSON.stringify(signalCache, null, 2)); } catch {}
 }
 
@@ -234,20 +244,30 @@ function detectSFP(bars, levels) {
       if (!price) continue;
       const minSweep = price * MIN_SWEEP_PCT;
 
-      if (bar.high > price && bar.close < price && bar.high - price >= minSweep) {
+      // Natural direction only: SHORT at PDH or PDC (not PDL — would need PDC below PDL for valid target)
+      if (name !== 'PDL' && bar.high > price && bar.close < price && bar.high - price >= minSweep) {
         const depth = bar.high - price;
+        const entryLow = price - depth * 0.65, entryHigh = price + depth * 0.15;
+        const entry = (entryLow + entryHigh) / 2;
+        const stop  = bar.high * 1.0008;
         const { t1, t1Name, t2, t2Name } = sfpTargets('SHORT', name, levels);
-        out.push({ type: 'SFP', direction: 'SHORT', level: name, levelPrice: price,
-          entryLow: price - depth * 0.65, entryHigh: price + depth * 0.15,
-          stop: bar.high * 1.0008, t1, t1Name, t2, t2Name });
+        const rrVal = t1 ? Math.abs(entry - t1) / Math.abs(entry - stop) : 0;
+        if (rrVal >= MIN_RR)
+          out.push({ type: 'SFP', direction: 'SHORT', level: name, levelPrice: price,
+            entryLow, entryHigh, stop, t1, t1Name, t2, t2Name });
       }
 
-      if (bar.low < price && bar.close > price && price - bar.low >= minSweep) {
+      // Natural direction only: LONG at PDL or PDC (not PDH — would need PDC above PDH for valid target)
+      if (name !== 'PDH' && bar.low < price && bar.close > price && price - bar.low >= minSweep) {
         const depth = price - bar.low;
+        const entryLow = price - depth * 0.15, entryHigh = price + depth * 0.65;
+        const entry = (entryLow + entryHigh) / 2;
+        const stop  = bar.low * 0.9992;
         const { t1, t1Name, t2, t2Name } = sfpTargets('LONG', name, levels);
-        out.push({ type: 'SFP', direction: 'LONG', level: name, levelPrice: price,
-          entryLow: price - depth * 0.15, entryHigh: price + depth * 0.65,
-          stop: bar.low * 0.9992, t1, t1Name, t2, t2Name });
+        const rrVal = t1 ? Math.abs(entry - t1) / Math.abs(entry - stop) : 0;
+        if (rrVal >= MIN_RR)
+          out.push({ type: 'SFP', direction: 'LONG', level: name, levelPrice: price,
+            entryLow, entryHigh, stop, t1, t1Name, t2, t2Name });
       }
     }
   }
@@ -275,7 +295,7 @@ function detectBnR(bars, levels) {
   const prev = recent.slice(0, -1);
 
   if (levels.PDH) {
-    const broke = prev.some(b => b.close > levels.PDH * 1.0005);
+    const broke = prev.some(b => b.close > levels.PDH * 1.0025); // 0.25% min breakout conviction
     if (broke && last.low <= levels.PDH * 1.001 && last.close > levels.PDH * 0.9995) {
       const entry = levels.PDH;
       const stop  = Math.min(...recent.slice(-2).map(b => b.low)) * 0.9992;
@@ -287,7 +307,7 @@ function detectBnR(bars, levels) {
   }
 
   if (levels.PDL) {
-    const broke = prev.some(b => b.close < levels.PDL * 0.9995);
+    const broke = prev.some(b => b.close < levels.PDL * 0.9975); // 0.25% min breakout conviction
     if (broke && last.high >= levels.PDL * 0.999 && last.close < levels.PDL * 1.0005) {
       const entry = levels.PDL;
       const stop  = Math.max(...recent.slice(-2).map(b => b.high)) * 1.0008;
@@ -407,6 +427,61 @@ function buildTTMsg(ticker, cisd, fractal, macro) {
   ].filter(Boolean).join('\n');
 }
 
+// ─── Chart drawing ────────────────────────────────────────────────────────────
+
+async function drawSignal(ticker, setup, macro, tvConnected) {
+  if (!tvConnected) return;
+  try {
+    await coreChart.setSymbol({ symbol: TV_SYMBOL[ticker] });
+    await new Promise(r => setTimeout(r, 1000));
+
+    const { type, direction, level, entryLow, entryHigh, stop, t1, t1Name, t2, t2Name } = setup;
+    const entry = (entryLow + entryHigh) / 2;
+    const now   = Math.floor(Date.now() / 1000);
+    const color = direction === 'LONG' ? '#1976D2' : '#e53935';
+    const p1    = pnl(entry, t1, direction, ticker);
+    const r1    = rrStr(entry, t1, stop, direction);
+
+    // Entry line
+    await coreDrawing.drawShape({ shape: 'horizontal_line',
+      point: { time: now, price: entry },
+      overrides: JSON.stringify({ linecolor: color, linewidth: 2, linestyle: 0 }),
+      text: `${direction} Entry` });
+
+    // Stop line (dashed red)
+    await coreDrawing.drawShape({ shape: 'horizontal_line',
+      point: { time: now, price: stop },
+      overrides: JSON.stringify({ linecolor: '#e53935', linewidth: 1, linestyle: 2 }),
+      text: 'Stop' });
+
+    // T1 line (green dashed)
+    if (t1 != null) {
+      await coreDrawing.drawShape({ shape: 'horizontal_line',
+        point: { time: now, price: t1 },
+        overrides: JSON.stringify({ linecolor: '#43a047', linewidth: 1, linestyle: 1 }),
+        text: `T1 (${t1Name})` });
+    }
+
+    // T2 line (lighter green)
+    if (t2 != null) {
+      await coreDrawing.drawShape({ shape: 'horizontal_line',
+        point: { time: now, price: t2 },
+        overrides: JSON.stringify({ linecolor: '#a5d6a7', linewidth: 1, linestyle: 1 }),
+        text: `T2 (${t2Name})` });
+    }
+
+    // Label — sits above entry for SHORT, below for LONG
+    const labelOffset = (stop - entry) * 0.5;
+    await coreDrawing.drawShape({ shape: 'text',
+      point: { time: now, price: entry + labelOffset },
+      text: `${direction === 'LONG' ? '🔵' : '🔴'} ${ticker} ${type} ${direction} @ ${level}  |  Stop: ${f(stop)}  |  T1: ${f(t1)} +$${p1 ?? '?'}/ct  |  R:R ${r1 ?? '?'}:1  |  ${macro}`,
+      overrides: JSON.stringify({ color, fontsize: 11, bold: true }) });
+
+  } catch (err) {
+    console.error(`[${ticker}] draw error: ${err.message}`);
+  }
+}
+
 // ─── Per-ticker scan ──────────────────────────────────────────────────────────
 
 async function scan(ticker, tvData) {
@@ -442,20 +517,23 @@ async function scan(ticker, tvData) {
 
   const out = [];
 
-  // STOICTA — SFP
+  const bullishMacro = ['BULLISH', 'BOUNCE', 'AT THE CROSS'];
+  const bearishMacro = ['BEARISH', 'PULLBACK', 'AT THE CROSS'];
+
+  // STOICTA — SFP (SFP at a level can trade against macro — level is the filter)
   for (const setup of detectSFP(bars5d, levels)) {
     if (setup.direction === 'SHORT' && macro === 'BULLISH') continue;
     if (setup.direction === 'LONG'  && macro === 'BEARISH') continue;
     const key = `${ticker}_SFP_${setup.level}_${setup.direction}`;
-    if (!isDupe(key)) out.push({ key, msg: buildStoicMsg(ticker, setup, macro) });
+    if (!isDupe(key)) out.push({ key, msg: buildStoicMsg(ticker, setup, macro), ticker, setup, macro });
   }
 
-  // STOICTA — B&R
+  // STOICTA — B&R (stricter: must align with macro direction)
   for (const setup of detectBnR(bars5d, levels)) {
-    if (setup.direction === 'SHORT' && macro === 'BULLISH') continue;
-    if (setup.direction === 'LONG'  && macro === 'BEARISH') continue;
+    if (setup.direction === 'SHORT' && !bearishMacro.includes(macro)) continue;
+    if (setup.direction === 'LONG'  && !bullishMacro.includes(macro)) continue;
     const key = `${ticker}_BnR_${setup.level}_${setup.direction}`;
-    if (!isDupe(key)) out.push({ key, msg: buildStoicMsg(ticker, setup, macro) });
+    if (!isDupe(key)) out.push({ key, msg: buildStoicMsg(ticker, setup, macro), ticker, setup, macro });
   }
 
   // TTRADES — CISD + fractal bias
@@ -464,7 +542,16 @@ async function scan(ticker, tvData) {
     const wantDir = fractal.bias === 'Bullish' ? 'LONG' : 'SHORT';
     if (cisd?.direction === wantDir) {
       const key = `${ticker}_TTRADES_${cisd.direction}`;
-      if (!isDupe(key)) out.push({ key, msg: buildTTMsg(ticker, cisd, fractal, macro) });
+      // Build a setup-like object for drawing
+      const set   = fractal.activeFibSets?.[0] ?? {};
+      const t1Raw = set['-1'] ?? null;
+      const t2Raw = set['-2'] ?? null;
+      const ttSetup = { type: 'TTRADES', direction: cisd.direction,
+        level: 'CISD', entryLow: cisd.entry * 0.9999, entryHigh: cisd.entry * 1.0001,
+        stop: cisd.stop,
+        t1: t1Raw && (cisd.direction === 'LONG' ? t1Raw > cisd.entry : t1Raw < cisd.entry) ? t1Raw : null, t1Name: 'fib -1',
+        t2: t2Raw && (cisd.direction === 'LONG' ? t2Raw > cisd.entry : t2Raw < cisd.entry) ? t2Raw : null, t2Name: 'fib -2' };
+      if (!isDupe(key)) out.push({ key, msg: buildTTMsg(ticker, cisd, fractal, macro), ticker, setup: ttSetup, macro });
     }
   }
 
@@ -495,9 +582,10 @@ async function scan(ticker, tvData) {
 
   if (!signals.length) { console.log(`[${ts}] no signals`); return; }
 
-  for (const { key, msg } of signals) {
+  for (const { key, msg, ticker, setup, macro } of signals) {
     console.log(`[SIGNAL] ${key}`);
     await telegram(msg);
     markSent(key);
+    await drawSignal(ticker, setup, macro, !!tvData);
   }
 })();
