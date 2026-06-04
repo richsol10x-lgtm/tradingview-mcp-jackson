@@ -395,7 +395,15 @@ async function handleMessage(text) {
   // --- Trigger immediate signal scan ---
   if (cmd === 'scan') {
     await send('Running signal scan...');
-    await runScript(SIGNALS_SCRIPT, null);
+    const scanOutput = await new Promise(resolve => {
+      const child  = spawn(process.execPath, [SIGNALS_SCRIPT], { cwd: join(__dirname, '..') });
+      const lines  = [];
+      child.stdout.on('data', d => lines.push(d.toString()));
+      child.stderr.on('data', d => process.stderr.write(d));
+      child.on('close', () => resolve(lines.join('')));
+    });
+    const found = (scanOutput.match(/\[SIGNAL\]/g) ?? []).length;
+    await send(`Scan complete — ${found} signal${found === 1 ? '' : 's'} found.`);
     return;
   }
 
