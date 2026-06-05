@@ -918,9 +918,14 @@ async function syncMODrawings(ticker, mos, apiPath) {
   for (const [label, mo] of Object.entries(mos)) {
     const cached = db[ticker][label];
 
+    const removeEntity = async (id) => {
+      if (!id) return;
+      try { await evaluate(`${apiPath}.removeEntity(${JSON.stringify(id)})`); } catch {}
+    };
+
     if (!mo) {
       if (cached?.entityId) {
-        try { await evaluate(`${apiPath}.removeEntity(${JSON.stringify(cached.entityId)})`); } catch {}
+        await removeEntity(cached.entityId);
         delete db[ticker][label];
       }
       continue;
@@ -930,17 +935,22 @@ async function syncMODrawings(ticker, mos, apiPath) {
     if (cached?.price && Math.abs(cached.price - mo.price) / cached.price < 0.001) continue;
 
     // Remove stale drawing if exists
-    if (cached?.entityId) {
-      try { await evaluate(`${apiPath}.removeEntity(${JSON.stringify(cached.entityId)})`); } catch {}
-    }
+    if (cached?.entityId) await removeEntity(cached.entityId);
 
     // Draw rectangle spanning exactly the swing candle that started the trend
     const width = MO_INTERVAL[label] ?? 300;
     try {
-      const entityId = await evaluate(`${apiPath}.createMultipointShape(${JSON.stringify([
-        { time: mo.time,         price: mo.high },
-        { time: mo.time + width, price: mo.low  },
-      ])}, ${JSON.stringify({ shape: 'rectangle', text: label, overrides: moOverrides(mo.dir) })})`);
+      const entityId = await evaluate(`(() => {
+        const e = ${apiPath}.createMultipointShape(${JSON.stringify([
+          { time: mo.time,         price: mo.high },
+          { time: mo.time + width, price: mo.low  },
+        ])}, ${JSON.stringify({ shape: 'rectangle', text: label, overrides: moOverrides(mo.dir) })});
+        if (!e) return null;
+        if (typeof e === 'string') return e;
+        if (e.id) return e.id;
+        const keys = Object.getOwnPropertyNames(e);
+        return keys.length ? e[keys[0]] : String(e);
+      })()`);
       db[ticker][label] = { entityId, price: mo.price, dir: mo.dir };
     } catch (e) {
       console.error(`[${ticker}] MO draw error (${label}): ${e.message}`);
