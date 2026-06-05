@@ -496,8 +496,9 @@ function detectSBS(bars5m, mo1h, mo4h, moDaily, macroDir, sma20_5m, sma200_5m) {
     // ── Model 1 vs 2: did Move 4 reach any move origin? ─────────────────────
     let model = 1;
     const htfAligned = [];
+    const mo5m = findMoveOrigin(b.slice(0, m1Idx + 1));
     const moChecks = [
-      { mo: findMoveOrigin(b.slice(0, m1Idx + 1)), label: '5M MO' },
+      { mo: mo5m,    label: '5M MO' },
       { mo: mo1h,    label: '1H MO' },
       { mo: mo4h,    label: '4H MO' },
       { mo: moDaily, label: 'Daily MO' },
@@ -584,6 +585,7 @@ function detectSBS(bars5m, mo1h, mo4h, moDaily, macroDir, sma20_5m, sma200_5m) {
       t2: t2 != null ? +t2.toFixed(4) : null, t2Name,
       cisdConfirmed, ifvg: ifvgZone != null, smaBounce, confluenceScore,
       htfMoLabel: htfAligned.join(' + '),
+      moObjects: { '5M MO': mo5m, '1H MO': mo1h, '4H MO': mo4h, 'Daily MO': moDaily },
       // Fib anchors for TV drawing: M4 extreme → M5 peak → entry
       fibA: m4Extreme, fibA_time: b[m4Idx].time,
       fibB: m5Peak,    fibB_time: b[m4Idx + 1 + m5PeakIdx]?.time ?? b[m4Idx].time,
@@ -876,6 +878,17 @@ async function drawSignal(ticker, setup, macro, tvConnected) {
         { time: setup.fibB_time, price: setup.fibB },
         { time: now,             price: entry },
       ])}, ${JSON.stringify({ shape: 'fib_trend_ext', overrides: {} })})`);
+    }
+
+    // SBS: draw horizontal lines at each detected move origin
+    if (type === 'SBS' && setup.moObjects) {
+      const color = direction === 'LONG' ? '#26a69a' : '#ef5350';
+      for (const [label, mo] of Object.entries(setup.moObjects)) {
+        if (!mo) continue;
+        await evaluate(`${apiPath}.createMultipointShape(${JSON.stringify([
+          { time: now, price: mo.price },
+        ])}, ${JSON.stringify({ shape: 'horizontal_line', overrides: { linecolor: color, linewidth: 1, linestyle: 1, text: label } })})`);
+      }
     }
   } catch (err) {
     console.error(`[${ticker}] draw error: ${err.message}`);
