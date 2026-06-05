@@ -1010,8 +1010,8 @@ async function scan(ticker, tvData) {
 
   const out = [];
 
-  // Pre-market + NY open caution window — skip all signals, MO drawings still update
-  if (isCautionWindow()) return { signals: out, mos };
+  // Pre-market + NY open caution window (equity index only) — skip all signals, MO drawings still update
+  if (['MNQ', 'MES'].includes(ticker) && isCautionWindow()) return { signals: out, mos };
 
   const bullishMacro = ['BULLISH', 'BOUNCE', 'AT THE CROSS'];
   const bearishMacro = ['BEARISH', 'PULLBACK', 'AT THE CROSS'];
