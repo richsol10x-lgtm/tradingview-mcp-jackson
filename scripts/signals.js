@@ -374,12 +374,12 @@ function findMoveOrigin(bars) {
   if (bosDir === 'BULL') {
     const pre = swingLows.filter(sl => sl.idx < bosIdx);
     if (!pre.length) return null;
-    const o = pre.at(-1);
+    const o = pre.reduce((min, sl) => sl.price < min.price ? sl : min);
     return { dir: 'BULL', high: bars[o.idx].high, low: bars[o.idx].low, price: o.price, idx: o.idx, time: bars[o.idx].time };
   } else {
     const pre = swingHighs.filter(sh => sh.idx < bosIdx);
     if (!pre.length) return null;
-    const o = pre.at(-1);
+    const o = pre.reduce((max, sh) => sh.price > max.price ? sh : max);
     return { dir: 'BEAR', high: bars[o.idx].high, low: bars[o.idx].low, price: o.price, idx: o.idx, time: bars[o.idx].time };
   }
 }
