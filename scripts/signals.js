@@ -52,8 +52,8 @@ function etDay() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
 }
 
-// NY open caution window: 9:25–9:45 ET — volatile fake moves, no signals
-function isNYOpenWindow() {
+// Pre-market + NY open caution window: 7:00–9:45 ET — manipulation / fake moves, no signals
+function isCautionWindow() {
   const now = new Date();
   const et  = new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/New_York', hour: 'numeric', minute: 'numeric', hour12: false,
@@ -61,7 +61,7 @@ function isNYOpenWindow() {
   const h = +et.find(p => p.type === 'hour').value;
   const m = +et.find(p => p.type === 'minute').value;
   const mins = h * 60 + m;
-  return mins >= 9 * 60 + 25 && mins < 9 * 60 + 45;
+  return mins >= 7 * 60 && mins < 9 * 60 + 45;
 }
 function isDupe(key) { return !!signalCache[`${key}_${etDay()}`]; }
 function markSent(key) {
@@ -1010,8 +1010,8 @@ async function scan(ticker, tvData) {
 
   const out = [];
 
-  // NY open caution window — skip all signals, MO drawings still update
-  if (isNYOpenWindow()) return { signals: out, mos };
+  // Pre-market + NY open caution window — skip all signals, MO drawings still update
+  if (isCautionWindow()) return { signals: out, mos };
 
   const bullishMacro = ['BULLISH', 'BOUNCE', 'AT THE CROSS'];
   const bearishMacro = ['BEARISH', 'PULLBACK', 'AT THE CROSS'];
