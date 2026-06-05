@@ -891,13 +891,12 @@ async function drawSignal(ticker, setup, macro, tvConnected) {
 // Seconds per candle for each MO timeframe label
 const MO_INTERVAL = { '5M MO': 300, '1H MO': 3600, '4H MO': 14400, 'Daily MO': 86400 };
 
-function moOverrides(dir) {
-  const fill = dir === 'BULL' ? 'rgba(76, 175, 80, 0.3162)' : 'rgba(242, 54, 69, 0.3162)';
+function moOverrides() {
   return {
-    color: 'rgba(0, 0, 0, 0)',
+    color: 'rgba(255, 152, 0, 1)',
     fillBackground: true,
-    backgroundColor: fill,
-    linewidth: 1,
+    backgroundColor: 'rgba(255, 152, 0, 0.3162)',
+    linewidth: 2,
     bold: true,
     textColor: 'rgba(0, 0, 0, 0.5669)',
     fontSize: 10,
@@ -944,7 +943,7 @@ async function syncMODrawings(ticker, mos, apiPath) {
         const e = ${apiPath}.createMultipointShape(${JSON.stringify([
           { time: mo.time,         price: mo.high },
           { time: mo.time + width, price: mo.low  },
-        ])}, ${JSON.stringify({ shape: 'rectangle', text: label, overrides: moOverrides(mo.dir) })});
+        ])}, ${JSON.stringify({ shape: 'rectangle', text: label, overrides: moOverrides() })});
         if (!e) return null;
         if (typeof e === 'string') return e;
         if (e.id) return e.id;
