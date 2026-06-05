@@ -902,7 +902,7 @@ function moOverrides(dir) {
     textColor: 'rgba(0, 0, 0, 0.5669)',
     fontSize: 10,
     extendLeft: false,
-    extendRight: false,
+    extendRight: true,
     'middleLine.showLine': true,
     'middleLine.lineWidth': 1,
     'middleLine.lineColor': 'rgba(0, 0, 0, 1)',
