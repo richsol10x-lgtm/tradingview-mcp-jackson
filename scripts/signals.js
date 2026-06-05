@@ -18,6 +18,7 @@ import * as coreChart   from '../src/core/chart.js';
 import * as coreData    from '../src/core/data.js';
 import * as coreHealth  from '../src/core/health.js';
 import * as coreDrawing from '../src/core/drawing.js';
+import { evaluate, getChartApi } from '../src/connection.js';
 
 const TELEGRAM_TOKEN   = env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = env.TELEGRAM_CHAT_ID;
@@ -504,16 +505,20 @@ function detectCISDFib(bars) {
     const risk  = Math.abs(entry50 - stop);
     if (risk === 0) continue;
 
-    // Targets: 161.8% and 200% of trend-based extension
-    const t1 = isLong ? C + wave1 * 1.618 : C - wave1 * 1.618;
-    const t2 = isLong ? C + wave1 * 2.0   : C - wave1 * 2.0;
+    // Targets: 261.8% and 423.6% of trend-based extension
+    const t1 = isLong ? C + wave1 * 2.618 : C - wave1 * 2.618;
+    const t2 = isLong ? C + wave1 * 4.236 : C - wave1 * 4.236;
     if (Math.abs(t1 - entry50) / risk < MIN_RR) continue;
 
     return {
       type: 'CISD-Fib', direction: dir, level: '100%',
       entryLow:  isLong ? entry618 : entry50,
       entryHigh: isLong ? entry50  : entry618,
-      stop, t1, t1Name: '161.8%', t2, t2Name: '200%',
+      stop, t1, t1Name: '261.8%', t2, t2Name: '423.6%',
+      // Fib anchor data for TV drawing
+      fibA: A, fibA_time: b[A_idx].time,
+      fibB: B, fibB_time: b[B_idx].time,
+      fibC: C, fibC_time: b[C_idx].time,
     };
   }
   return null;
@@ -654,47 +659,31 @@ async function drawSignal(ticker, setup, macro, tvConnected) {
     await coreChart.setSymbol({ symbol: TV_SYMBOL[ticker] });
     await new Promise(r => setTimeout(r, 1000));
 
-    const { type, direction, level, entryLow, entryHigh, stop, t1, t1Name, t2, t2Name } = setup;
-    const entry = (entryLow + entryHigh) / 2;
-    const now   = Math.floor(Date.now() / 1000);
-    const color = direction === 'LONG' ? '#1976D2' : '#e53935';
-    const p1    = pnl(entry, t1, direction, ticker);
-    const r1    = rrStr(entry, t1, stop, direction);
+    const { type, direction, entryLow, entryHigh, stop, t1 } = setup;
+    const entry   = (entryLow + entryHigh) / 2;
+    const now     = Math.floor(Date.now() / 1000);
+    const apiPath = await getChartApi();
 
-    // Entry line
-    await coreDrawing.drawShape({ shape: 'horizontal_line',
-      point: { time: now, price: entry },
-      overrides: JSON.stringify({ linecolor: color, linewidth: 2, linestyle: 0 }),
-      text: `${direction} Entry` });
+    // Long/Short position tool — entry box with stop and T1 target
+    const posShape    = direction === 'LONG' ? 'long_position' : 'short_position';
+    const targetPrice = t1 ?? (direction === 'LONG' ? entry * 1.02 : entry * 0.98);
+    const posPts  = JSON.stringify([
+      { time: now, price: entry },
+      { time: now + 14400, price: targetPrice },
+    ]);
+    const posOpts = JSON.stringify({ shape: posShape, overrides: { stopLevel: stop } });
+    await evaluate(`${apiPath}.createMultipointShape(${posPts}, ${posOpts})`);
 
-    // Stop line (dashed red)
-    await coreDrawing.drawShape({ shape: 'horizontal_line',
-      point: { time: now, price: stop },
-      overrides: JSON.stringify({ linecolor: '#e53935', linewidth: 1, linestyle: 2 }),
-      text: 'Stop' });
-
-    // T1 line (green dashed)
-    if (t1 != null) {
-      await coreDrawing.drawShape({ shape: 'horizontal_line',
-        point: { time: now, price: t1 },
-        overrides: JSON.stringify({ linecolor: '#43a047', linewidth: 1, linestyle: 1 }),
-        text: `T1 (${t1Name})` });
+    // For CISD-Fib: draw Trend-Based Fib Extension with A→B→C anchors
+    if (type === 'CISD-Fib' && setup.fibA != null) {
+      const fibPts  = JSON.stringify([
+        { time: setup.fibA_time, price: setup.fibA },
+        { time: setup.fibB_time, price: setup.fibB },
+        { time: setup.fibC_time, price: setup.fibC },
+      ]);
+      const fibOpts = JSON.stringify({ shape: 'fib_trend_ext', overrides: {} });
+      await evaluate(`${apiPath}.createMultipointShape(${fibPts}, ${fibOpts})`);
     }
-
-    // T2 line (lighter green)
-    if (t2 != null) {
-      await coreDrawing.drawShape({ shape: 'horizontal_line',
-        point: { time: now, price: t2 },
-        overrides: JSON.stringify({ linecolor: '#a5d6a7', linewidth: 1, linestyle: 1 }),
-        text: `T2 (${t2Name})` });
-    }
-
-    // Label — sits above entry for SHORT, below for LONG
-    const labelOffset = (stop - entry) * 0.5;
-    await coreDrawing.drawShape({ shape: 'text',
-      point: { time: now, price: entry + labelOffset },
-      text: `${direction === 'LONG' ? '🔵' : '🔴'} ${ticker} ${type} ${direction} @ ${level}  |  Stop: ${f(stop)}  |  T1: ${f(t1)} +$${p1 ?? '?'}/ct  |  R:R ${r1 ?? '?'}:1  |  ${macro}`,
-      overrides: JSON.stringify({ color, fontsize: 11, bold: true }) });
 
   } catch (err) {
     console.error(`[${ticker}] draw error: ${err.message}`);
