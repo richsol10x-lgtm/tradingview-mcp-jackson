@@ -888,10 +888,11 @@ async function drawSignal(ticker, setup, macro, tvConnected) {
 
 // ─── Move origin rectangle sync ───────────────────────────────────────────────
 
+// Seconds per candle for each MO timeframe label
+const MO_INTERVAL = { '5M MO': 300, '1H MO': 3600, '4H MO': 14400, 'Daily MO': 86400 };
+
 function moOverrides(dir) {
-  const green = 'rgba(76, 175, 80, 0.3162)';
-  const red   = 'rgba(242, 54, 69, 0.3162)';
-  const fill  = dir === 'BULL' ? green : red;
+  const fill = dir === 'BULL' ? 'rgba(76, 175, 80, 0.3162)' : 'rgba(242, 54, 69, 0.3162)';
   return {
     color: 'rgba(0, 0, 0, 0)',
     fillBackground: true,
@@ -901,7 +902,7 @@ function moOverrides(dir) {
     textColor: 'rgba(0, 0, 0, 0.5669)',
     fontSize: 10,
     extendLeft: false,
-    extendRight: true,
+    extendRight: false,
     'middleLine.showLine': true,
     'middleLine.lineWidth': 1,
     'middleLine.lineColor': 'rgba(0, 0, 0, 1)',
@@ -918,7 +919,6 @@ async function syncMODrawings(ticker, mos, apiPath) {
     const cached = db[ticker][label];
 
     if (!mo) {
-      // MO no longer valid — remove if we drew one
       if (cached?.entityId) {
         try { await evaluate(`${apiPath}.removeEntity(${JSON.stringify(cached.entityId)})`); } catch {}
         delete db[ticker][label];
@@ -934,11 +934,12 @@ async function syncMODrawings(ticker, mos, apiPath) {
       try { await evaluate(`${apiPath}.removeEntity(${JSON.stringify(cached.entityId)})`); } catch {}
     }
 
-    // Draw new rectangle zone: from MO bar extending right to chart edge
+    // Draw rectangle spanning exactly the swing candle that started the trend
+    const width = MO_INTERVAL[label] ?? 300;
     try {
       const entityId = await evaluate(`${apiPath}.createMultipointShape(${JSON.stringify([
-        { time: mo.time,       price: mo.high },
-        { time: mo.time + 300, price: mo.low  },
+        { time: mo.time,         price: mo.high },
+        { time: mo.time + width, price: mo.low  },
       ])}, ${JSON.stringify({ shape: 'rectangle', text: label, overrides: moOverrides(mo.dir) })})`);
       db[ticker][label] = { entityId, price: mo.price, dir: mo.dir };
     } catch (e) {
