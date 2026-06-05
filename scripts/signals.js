@@ -38,6 +38,7 @@ const MIN_RR        = 2.0;
 const CACHE_PATH       = join(__dirname, 'signal-cache.json');
 const FRACTAL_PATH     = join(__dirname, 'fractal-cache.json');
 const OPEN_TRADES_PATH = join(__dirname, 'open-trades.json');
+const MO_DRAWINGS_PATH = join(__dirname, 'mo-drawings.json');
 
 let signalCache = {};
 try { signalCache = JSON.parse(readFileSync(CACHE_PATH, 'utf8')); } catch {}
@@ -374,12 +375,12 @@ function findMoveOrigin(bars) {
     const pre = swingLows.filter(sl => sl.idx < bosIdx);
     if (!pre.length) return null;
     const o = pre.at(-1);
-    return { dir: 'BULL', high: bars[o.idx].high, low: bars[o.idx].low, price: o.price, idx: o.idx };
+    return { dir: 'BULL', high: bars[o.idx].high, low: bars[o.idx].low, price: o.price, idx: o.idx, time: bars[o.idx].time };
   } else {
     const pre = swingHighs.filter(sh => sh.idx < bosIdx);
     if (!pre.length) return null;
     const o = pre.at(-1);
-    return { dir: 'BEAR', high: bars[o.idx].high, low: bars[o.idx].low, price: o.price, idx: o.idx };
+    return { dir: 'BEAR', high: bars[o.idx].high, low: bars[o.idx].low, price: o.price, idx: o.idx, time: bars[o.idx].time };
   }
 }
 
@@ -880,19 +881,72 @@ async function drawSignal(ticker, setup, macro, tvConnected) {
       ])}, ${JSON.stringify({ shape: 'fib_trend_ext', overrides: {} })})`);
     }
 
-    // SBS: draw horizontal lines at each detected move origin
-    if (type === 'SBS' && setup.moObjects) {
-      const color = direction === 'LONG' ? '#26a69a' : '#ef5350';
-      for (const [label, mo] of Object.entries(setup.moObjects)) {
-        if (!mo) continue;
-        await evaluate(`${apiPath}.createMultipointShape(${JSON.stringify([
-          { time: now, price: mo.price },
-        ])}, ${JSON.stringify({ shape: 'horizontal_line', overrides: { linecolor: color, linewidth: 1, linestyle: 1, text: label } })})`);
-      }
-    }
   } catch (err) {
     console.error(`[${ticker}] draw error: ${err.message}`);
   }
+}
+
+// ─── Move origin rectangle sync ───────────────────────────────────────────────
+
+function moOverrides(dir) {
+  const green = 'rgba(76, 175, 80, 0.3162)';
+  const red   = 'rgba(242, 54, 69, 0.3162)';
+  const fill  = dir === 'BULL' ? green : red;
+  return {
+    color: 'rgba(0, 0, 0, 0)',
+    fillBackground: true,
+    backgroundColor: fill,
+    linewidth: 1,
+    bold: true,
+    textColor: 'rgba(0, 0, 0, 0.5669)',
+    fontSize: 10,
+    extendLeft: false,
+    extendRight: true,
+    'middleLine.showLine': true,
+    'middleLine.lineWidth': 1,
+    'middleLine.lineColor': 'rgba(0, 0, 0, 1)',
+    'middleLine.lineStyle': 2,
+  };
+}
+
+async function syncMODrawings(ticker, mos, apiPath) {
+  let db = {};
+  try { db = JSON.parse(readFileSync(MO_DRAWINGS_PATH, 'utf8')); } catch {}
+  if (!db[ticker]) db[ticker] = {};
+
+  for (const [label, mo] of Object.entries(mos)) {
+    const cached = db[ticker][label];
+
+    if (!mo) {
+      // MO no longer valid — remove if we drew one
+      if (cached?.entityId) {
+        try { await evaluate(`${apiPath}.removeEntity(${JSON.stringify(cached.entityId)})`); } catch {}
+        delete db[ticker][label];
+      }
+      continue;
+    }
+
+    // Same MO (within 0.1%) — nothing to do
+    if (cached?.price && Math.abs(cached.price - mo.price) / cached.price < 0.001) continue;
+
+    // Remove stale drawing if exists
+    if (cached?.entityId) {
+      try { await evaluate(`${apiPath}.removeEntity(${JSON.stringify(cached.entityId)})`); } catch {}
+    }
+
+    // Draw new rectangle zone: from MO bar extending right to chart edge
+    try {
+      const entityId = await evaluate(`${apiPath}.createMultipointShape(${JSON.stringify([
+        { time: mo.time,       price: mo.high },
+        { time: mo.time + 300, price: mo.low  },
+      ])}, ${JSON.stringify({ shape: 'rectangle', text: label, overrides: moOverrides(mo.dir) })})`);
+      db[ticker][label] = { entityId, price: mo.price, dir: mo.dir };
+    } catch (e) {
+      console.error(`[${ticker}] MO draw error (${label}): ${e.message}`);
+    }
+  }
+
+  try { writeFileSync(MO_DRAWINGS_PATH, JSON.stringify(db, null, 2)); } catch {}
 }
 
 // ─── Per-ticker scan ──────────────────────────────────────────────────────────
@@ -912,9 +966,11 @@ async function scan(ticker, tvData) {
   const bars4h = buildFourHourBars(bars1h);
   const macro  = dailyMacroBias(barsDaily);
 
+  const mo5m    = findMoveOrigin(bars5m.slice(-62));
   const mo1h    = findMoveOrigin(bars1h.slice(-120));
   const mo4h    = findMoveOrigin(bars4h.slice(-60));
   const moDaily = findMoveOrigin(barsDaily.slice(-60));
+  const mos     = { '5M MO': mo5m, '1H MO': mo1h, '4H MO': mo4h, 'Daily MO': moDaily };
 
   const closes5m = bars5m.map(b => b.close);
   const sma20_5m  = sma(closes5m, 20);
@@ -966,13 +1022,14 @@ async function scan(ticker, tvData) {
     if (!isDupe(key)) out.push({ key, msg: buildSBSMsg(ticker, sbs, macro), ticker, setup: sbs, macro });
   }
 
-  return out;
+  return { signals: out, mos };
 }
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 (async () => {
-  const ts = new Date().toISOString();
+  const ts      = new Date().toISOString();
+  const tickers = Object.keys(YAHOO);
 
   await checkOpenTrades();
 
@@ -982,22 +1039,36 @@ async function scan(ticker, tvData) {
     await telegram('⚠️ *Signals:* TV offline — STOICTA levels from Yahoo.');
   }
 
-  const results = await Promise.allSettled(Object.keys(YAHOO).map(t => scan(t, tvData)));
-  const signals = results.flatMap((r, i) => {
+  const results = await Promise.allSettled(tickers.map(t => scan(t, tvData)));
+  const scanResults = results.map((r, i) => {
     if (r.status === 'rejected') {
-      console.error(`[${Object.keys(YAHOO)[i]}] scan error: ${r.reason?.message}`);
-      return [];
+      console.error(`[${tickers[i]}] scan error: ${r.reason?.message}`);
+      return { signals: [], mos: {} };
     }
     return r.value;
   });
 
-  if (!signals.length) { console.log(`[${ts}] no signals`); return; }
+  const signals = scanResults.flatMap(r => r.signals);
 
-  for (const { key, msg, ticker, setup, macro } of signals) {
-    console.log(`[SIGNAL] ${key}`);
-    await telegram(msg);
-    markSent(key);
-    saveOpenTrade({ key, ticker, setup });
-    await drawSignal(ticker, setup, macro, !!tvData);
+  if (signals.length) {
+    for (const { key, msg, ticker, setup, macro } of signals) {
+      console.log(`[SIGNAL] ${key}`);
+      await telegram(msg);
+      markSent(key);
+      saveOpenTrade({ key, ticker, setup });
+      await drawSignal(ticker, setup, macro, !!tvData);
+    }
+  } else {
+    console.log(`[${ts}] no signals`);
+  }
+
+  // Sync move origin rectangles for all tickers every cycle
+  if (tvData) {
+    const apiPath = await getChartApi();
+    for (let i = 0; i < tickers.length; i++) {
+      await coreChart.setSymbol({ symbol: TV_SYMBOL[tickers[i]] });
+      await new Promise(r => setTimeout(r, 800));
+      await syncMODrawings(tickers[i], scanResults[i].mos, apiPath);
+    }
   }
 })();
