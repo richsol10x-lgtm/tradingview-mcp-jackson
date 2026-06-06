@@ -15,7 +15,7 @@ const env       = require('dotenv').config({ path: join(__dirname, '../.env') })
 import * as coreChart   from '../src/core/chart.js';
 import * as coreData    from '../src/core/data.js';
 import * as coreHealth  from '../src/core/health.js';
-import { evaluate, getChartApi } from '../src/connection.js';
+import { evaluate, evaluateAsync, getChartApi } from '../src/connection.js';
 
 const TELEGRAM_TOKEN   = env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = env.TELEGRAM_CHAT_ID;
@@ -951,8 +951,8 @@ async function syncMODrawings(ticker, mos, apiPath) {
     // Draw rectangle spanning exactly the swing candle that started the trend
     const width = MO_INTERVAL[label] ?? 300;
     try {
-      const entityId = await evaluate(`(() => {
-        const e = ${apiPath}.createMultipointShape(${JSON.stringify([
+      const entityId = await evaluateAsync(`(async () => {
+        const e = await ${apiPath}.createMultipointShape(${JSON.stringify([
           { time: mo.time,         price: mo.high },
           { time: mo.time + width, price: mo.low  },
         ])}, ${JSON.stringify({ shape: 'rectangle', text: label, overrides: moOverrides() })});
@@ -960,7 +960,7 @@ async function syncMODrawings(ticker, mos, apiPath) {
         if (typeof e === 'string') return e;
         if (e.id) return e.id;
         const keys = Object.getOwnPropertyNames(e);
-        return keys.length ? e[keys[0]] : String(e);
+        return keys.length ? String(e[keys[0]]) : null;
       })()`);
       db[ticker][label] = { entityId, price: mo.price, dir: mo.dir };
     } catch (e) {
